@@ -1,5 +1,7 @@
 # A5E：SD / NVMe 启动与恢复
 
+[A5E 文档](README.md) · [文档中心](../../README.md)
+
 ## 启动链与验收边界
 
 - SD：BROM → SD 上的 SPL/BL31/U-Boot → SD 的 EFI/GRUB → SD 系统。
@@ -13,7 +15,7 @@
 用户实际拔掉 SD 后，SPI-only 自动冷启动和普通重启均通过；每次均核对无 SD 块设备、
 NVMe 系统/持久化 UUID、内核/initrd/squashfs 摘要和文件直接读写。写 SPI 后插回 SD 的
 恢复启动及正确介质挂载也已通过；两块盘的临时调试服务已清理。
-最新真机状态以 [PCIe 验证记录](a5e-pcie.md) 为准，不把离线测试当成启动验收。
+最新真机状态以 [PCIe 验证记录](pcie.md) 为准，不把离线测试当成启动验收。
 
 ## 构建与产物
 

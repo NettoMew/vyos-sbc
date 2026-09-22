@@ -1,7 +1,7 @@
 #!/bin/sh
 # 板级启动设置：IRQ、XPS、UDP GRO forwarding 和 CPU governor。
 # Ethernet offload、RPS/RFS 由 VyOS 配置管理；不在启动后覆盖，也不通过调整
-# channel 数量重建队列。升级迁移要求见 docs/network-performance.md。
+# channel 数量重建队列。升级迁移要求见 docs/boards/e52c/network-performance.md。
 # IRQ 使用在线高 capacity CPU，各接口独立轮转；XPS/governor 策略保持不变。
 # 性能收益须独立测试，不能由脚本执行成功推断。
 # 可选覆盖 /etc/sbc/net-tune.conf（仅在自动判错时才放，默认四板都不带）：

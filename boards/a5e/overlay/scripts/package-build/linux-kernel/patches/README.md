@@ -23,7 +23,7 @@ PCIe support is based on the **actual Armbian reference image's build commit**
   Remove boot/always-on from the slot supply in both kernel and firmware DTs.
   The resulting 0545 kernel has booted from both SD and NVMe with independent
   medium UUIDs; NVMe growth, serial/SSH and direct I/O tests passed. Actual
-  SD-removed SPI-only cold/warm boot also passed (see `docs/a5e-pcie.md`).
+  SD-removed SPI-only cold/warm boot also passed (see `docs/boards/a5e/pcie.md`).
 
 The driver code retains original authorship/licensing. These are downstream
 backports, not a claim that vanilla Linux 6.18 supports A523 PCIe.

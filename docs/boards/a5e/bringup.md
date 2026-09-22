@@ -1,5 +1,7 @@
 # A5E 启动调查（2026-09-21～22）
 
+[A5E 文档](README.md) · [文档中心](../../README.md)
+
 ## 范围与现象
 
 ### 当前状态：0545 SD / NVMe 系统、SPI-only 冷启动与重启实测通过
@@ -12,7 +14,7 @@ squashfs 和 UUID 绑定的持久化分区进入 VyOS。NVMe 扩容至 57.4 GiB�
 SPI→NVMe 自动冷启动和普通重启均通过，重复读写摘要一致。写 SPI 后插回 SD 的恢复启动、
 正确介质挂载、双盘调试服务清理检查也已通过。
 U-Boot 的 SD FAT 大文件写入失败另有记录，不能宣称其已修复。当前证据和安装方法见
-[PCIe 状态](a5e-pcie.md) / [SD 与 NVMe 启动](a5e-nvme-boot.md)。
+[PCIe 状态](pcie.md) / [SD 与 NVMe 启动](boot.md)。
 下文各时间点是历史记录，不覆盖本段的当前状态。
 
 ### 最新反馈：0145 集成版已启动，继续修复 PCIe
@@ -20,7 +22,7 @@ U-Boot 的 SD FAT 大文件写入失败另有记录，不能宣称其已修复�
 用户提供的新日志已进入 VyOS 登录，`sunxi-a5e-hwid` 为两口绑定固件 MAC，
 并输出 `Configuration success`。这更新了下文早期“未进入用户态”的状态，
 但不是新增 PCIe 二进制的验收结果。`lspci` 为空另有驱动和固件 DT 缺口，
-见 [PCIe 调查与实现](a5e-pcie.md)。后续 COM3 只读检查确认 rsyslog 已自行启动，
+见 [PCIe 调查与实现](pcie.md)。后续 COM3 只读检查确认 rsyslog 已自行启动，
 实际配置校验通过；未改动该服务，也未判定最初失败的原因。
 
 ### 2026-09-22：源码集成与新镜像构建

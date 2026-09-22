@@ -9,7 +9,7 @@
   插槽供电与 PERST#/REFCLK/DMA 交接配套修复。只改 reset GPIO 极性不是完整解决方案。
   SPI 原始全空，逐字节证明后保存等价板外备份；定长写入固件、全片读回比较通过。
   用户实际拔 SD 冷启动：`Trying to boot from sunxi SPI` → NVMe EFI → 0545 系统、SSH/读写通过。
-  无 SD 普通重启、再次读写和写 SPI 后插回 SD 恢复也通过，最终状态见 `docs/a5e-pcie.md`。
+  无 SD 普通重启、再次读写和写 SPI 后插回 SD 恢复也通过，最终状态见 `docs/boards/a5e/pcie.md`。
   之前串口无响应期间 journal 持续运行约 3.57 小时，不应误判整机死机；本次串口/SSH 正常。
   已知 U-Boot SD FAT 大文件写入失败，未修复；ESP 已先备份再修复并启动验证，不用该路径备份 SPI。
   临时网络调试服务已从两块盘移除，不包含在正式镜像中。PCIe 与 USB3 共用通道，
@@ -34,7 +34,7 @@
   09-22 已从参考镜像内部取出完整 U-Boot config，确认 DRAM=936；按 Armbian 固定
   commit 0648ff3c4125d673c18b5f032dc7c28545c542b5 纳入 CLDO3/MMC 必需补丁，完整 U-Boot/BL31 编译通过。
 - 接续改动在 `D:\vyos-rockchip.omx-worktrees\launch-feat-task`；原 `D:\vyos-rockchip` 的
-  未提交内容已完整导入当前 worktree，原目录保留未动。详细取证见 `docs/a5e-bringup.md`。
+  未提交内容已完整导入当前 worktree，原目录保留未动。详细取证见 `docs/boards/a5e/bringup.md`。
 
 VyOS（rolling）→ Rockchip 板整盘镜像构建器：RK3528（e20c / m28k）+ RK3568（r5s）+
 RK3582（e52c）+ **Allwinner A527（a5e = Radxa Cubie A5E，SD/NVMe 及 SPI 冷启动已实测）**。
@@ -362,7 +362,7 @@ PCIe/ComboPHY/参考时钟必须由本板补丁补齐；固件传递的 DT 也�
   编译和配对 DT 合约通过；SD 正常启动已验证签名模块、固件、wlan0、AP/managed 类型
   切换和三轮被动扫描。用户限定只验驱动，不配置 STA/AP 业务。SD/SPI 已更新 0077，
   NVMe 驱动已部署，无 SD 的 SPI→NVMe 冷启动及重启均通过相同检查，扫描各 5/6/7 BSS。
-  1150 新整镜像未重刷验收，不把 0545 上的同组件验证冒充整镜像验证。见 docs/a5e-wifi.md。
+  1150 新整镜像未重刷验收，不把 0545 上的同组件验证冒充整镜像验证。见 docs/boards/a5e/wifi.md。
   A5E 现在需要 cross 内核树，不能再放行 container 完整计划。r8125/oled/GPU/NPU 不编。
 - **真机首跑风险点（按概率排序）**：① TF-A fork bl31 + U-Boot 2026.07 组合能否上电（Armbian 同组合
   在跑，风险低）；② U-Boot bootstd 在本板扫 ESP 起 grub（sunxi 走 EFI 与 RK 同路径）；③ gmac1
@@ -426,7 +426,7 @@ flowtable 与 Ethernet offload/RPS/RFS 留给用户通过 VyOS CLI 配置。
 - **governor=performance**：保留已有默认值；与 VyOS TuneD profile 存在管理交集，
   未完成归属迁移前不要同时引入 profile。
 部署新脚本前需要显式迁移所需 offload/RPS/RFS 配置；未配置节点不再由启动脚本
-补开。迁移差异、验证边界见 [网络调优配置边界](docs/network-performance.md)。
+补开。迁移差异、验证边界见 [网络调优配置边界](docs/boards/e52c/network-performance.md)。
 philosophy 同 sbc-leds.sh：**按接口名/驱动认，板间零 if 分支，缺项静默跳过** → 四板一脚本。
 可选覆盖 `/etc/sbc/net-tune.conf`（`GOVERNOR=` / `IFACE_CPU="eth0:2 ..."`，默认四板都不带）。
 enable 走 hook `95-sbc-net-tune-enable.chroot`（chroot 建 wants symlink，同 97-leds）。

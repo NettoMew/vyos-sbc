@@ -1,7 +1,9 @@
 # DAE 内核契约与 BTF 故障复盘
 
+[文档中心](../README.md) · [维护与验收](../build/maintenance.md)
+
 记录日期：2026-09-16。本文区分配置意图、实际构建产物、虚拟机启动和真机运行证据。
-完整配置以 [`73-dae.config`](../overlay/scripts/package-build/linux-kernel/config/73-dae.config)
+完整配置以 [`73-dae.config`](../../overlay/scripts/package-build/linux-kernel/config/73-dae.config)
 为唯一维护来源，不另建第二套配置片段。
 
 ## 故障及根因
@@ -49,10 +51,10 @@ iptables TPROXY target 的配置要求。IPv6 不是可随意删去的优化项�
 
 相关文件：
 
-- [`docker/Dockerfile.host`](../docker/Dockerfile.host)：仅在容器安装 pahole。
-- [`lib/kernel.sh`](../lib/kernel.sh)：`kernel_validate_config`、`kernel_validate_btf`、`kernel_validate_build`。
-- [`tests/kernel-features.sh`](../tests/kernel-features.sh)：缺项、空输入、BTF、包损坏及 raw/gzip 载荷回归。
-- [`tests/build-cache.sh`](../tests/build-cache.sh)：独立缓存回归使用最小能力 fixture。
+- [`docker/Dockerfile.host`](../../docker/Dockerfile.host)：仅在容器安装 pahole。
+- [`lib/kernel.sh`](../../lib/kernel.sh)：`kernel_validate_config`、`kernel_validate_btf`、`kernel_validate_build`。
+- [`tests/kernel-features.sh`](../../tests/kernel-features.sh)：缺项、空输入、BTF、包损坏及 raw/gzip 载荷回归。
+- [`tests/build-cache.sh`](../../tests/build-cache.sh)：独立缓存回归使用最小能力 fixture。
 
 接受内核包之前依次检查：
 
@@ -127,4 +129,4 @@ BTF 字节数只标识本次产物；后续版本不要求固定大小。除 BTF
   文件权限和并发实例占锁，不能再次归因于 BTF。新镜像也不会自动包含手工安装的 Mayami。
 
 发布升级使用完整 ISO，保留可回退镜像并单独备份应用状态；不要把补内核 DEB 当成完整的
-VyOS 镜像升级流程。有关版本、容器边界和通用验收见 [维护与构建](maintenance.md)。
+VyOS 镜像升级流程。有关版本、容器边界和通用验收见 [维护与构建](../build/maintenance.md)。

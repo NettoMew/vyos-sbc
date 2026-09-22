@@ -37,7 +37,7 @@ writing a second copy at 8 KiB would corrupt GPT and is not a fix.
 The USB DMA failure is physically diagnosed. Aligning the SD/DRAM baseline is
 evidence-based, but does not retroactively prove which difference caused the
 original no-SPL-output report. A newly built full firmware still needs its own
-hardware boot verification; see `docs/a5e-bringup.md`.
+hardware boot verification; see `docs/boards/a5e/bringup.md`.
 
 ## Current acceptance
 
@@ -58,7 +58,7 @@ correct SD medium/persistence selection also passed, with NVMe left unmounted.
 Known limitation: a 16 MiB U-Boot SD FAT write failed. The ESP was backed up,
 repaired under Linux, and then boot-tested. Do not use that firmware FAT-write
 path for backups; no fix for the large-write issue is claimed.
-See `docs/a5e-pcie.md` and `docs/a5e-nvme-boot.md` for current evidence.
+See `docs/boards/a5e/pcie.md` and `docs/boards/a5e/boot.md` for current evidence.
 
 ## Historical diagnostic milestones
 

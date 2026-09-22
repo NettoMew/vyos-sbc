@@ -1,105 +1,30 @@
 # vyos-sbc
 
-> 为 Rockchip / Allwinner 路由小主机构建开箱即用的 VyOS（rolling）整盘镜像。
-> 一套内核、一张基础镜像服务整个 RK3528 / RK3568 / RK3588 家族与 Allwinner A527;新增一款机型,通常只是写一份配置、放几个文件。
+为 Rockchip / Allwinner 小主机构建 VyOS 路由系统。
 
-VyOS 官方提供 arm64 软件源,却不带这些 Rockchip / Allwinner 设备的启动驱动。本项目在**不修改 vyos-build** 的前提下补齐内核、组装可直接 `dd` 烧录的整盘镜像,并把每款设备的差异收敛成清晰的声明式配置。
+提供可直接烧录的整盘镜像与原生升级 ISO，补齐板级启动、驱动和固件适配，保留 VyOS 的配置、升级与回退机制。
 
-## 特性
+## 支持设备
 
-- **声明式设备配置** —— 每款设备一份 `board.conf`(SoC、串口、U-Boot 配置等),再把少量定制文件按目录放好;构建脚本本身不含任何针对具体设备的分支判断。
-- **独立维护适配** —— 定制通过 overlay 和补丁投放,沿用上游的配置合并机制。升级时固定上游提交,重新验证补丁和各板产物。
-- **复用官方机制** —— 官方内核版本、官方镜像组装工具、官方 GRUB 生成逻辑。于是系统内置的 `add system image` 等升级能力开箱即用。
-- **算一次,处处用** —— 内核与基础镜像是整个家族共享、只构建一次的产物;每款设备的专属内容在本机秒级注入,不必重复跑慢速容器。
-
-## 支持的设备
-
-| 设备 | SoC | 网络 | 状态 |
+| 设备 | SoC | 网络 | 验证状态 |
 | :-- | :-- | :-- | :-- |
-| **Radxa E20C** | RK3528 | 双千兆 | 真机验证 |
-| **MangoPi M28K** | RK3528 | 双千兆 · Wi-Fi 6 · OLED | 真机验证 |
-| **NanoPi R5S** | RK3568 | 千兆 WAN + 双 2.5G | 真机验证 |
-| **Radxa E52C** | RK3582 | 双 2.5G | 真机验证（开核 8 核） |
-| **Radxa Cubie A5E** | Allwinner A527 | 双千兆 | SD / NVMe 系统及读写、无 SD 的 SPI 冷启动/重启实测通过 |
+| Radxa E20C | RK3528 | 双千兆 | 真机验证 |
+| MangoPi M28K | RK3528 | 双千兆 · Wi-Fi 6 | 真机验证 |
+| NanoPi R5S | RK3568 | 千兆 + 双 2.5G | 真机验证 |
+| Radxa E52C | RK3582 | 双 2.5G | 真机验证（开核 8 核） |
+| Radxa Cubie A5E | Allwinner A527 | 双千兆 · Wi-Fi 6 | SD / SPI→NVMe 启动、AIC8800 驱动验证 |
 
-## 快速开始
+支持状态记录已完成的真机测试，不代表每个新镜像都已通过完整验收。具体范围见设备文档与发布记录。
 
-```bash
-make a5e         # 完整构建（当前默认）：依赖检查 → 取源 → 内核 → 基础镜像 → U-Boot → 整盘镜像
-make a5e-dry     # 只看构建计划与缓存状态（不构建、不联网、不 sudo）
-```
+## 使用与文档
 
-产物在 `out/`，整盘默认 `.img.xz`，可用 Etcher 直接打开，或先解压成 `.img` 再烧录。
-当前 bring-up 只构建 A5E；裸 `make` 默认也是 A5E，其他设备仍可显式指定。命令行烧录：
+- **使用镜像**：[安装与首次启动](docs/usage/installation.md) · [升级与回退](docs/usage/upgrade.md)
+- **设备说明**：[Cubie A5E](docs/boards/a5e/README.md) · [E52C 网络调优](docs/boards/e52c/network-performance.md)
+- **构建与开发**：[构建指南](docs/build/README.md) · [项目架构](docs/development/architecture.md) · [设备适配](docs/development/porting.md)
+- **完整索引**：[文档中心](docs/README.md) · [发布记录](docs/releases/README.md)
 
-A5E 的 U-Boot/USB DMA/网口命名修复与验证边界见 [启动调查](docs/a5e-bringup.md)。
-PCIe RC / ComboPHY 与固件设备树的配套修复见 [A5E PCIe](docs/a5e-pcie.md)。
-NVMe 安装、SD/NVMe 介质隔离和当前验证边界见 [SD / NVMe 启动](docs/a5e-nvme-boot.md)。
-AIC8800 驱动进度见 [A5E Wi-Fi](docs/a5e-wifi.md)：SD 及无 SD 的 NVMe 冷启动／重启驱动验收通过；STA／AP 网络配置由 VyOS 负责。
-本轮修复必须安装完整 `.img.xz`；`add system image` 的 ISO 升级不会更新 U-Boot。
-
-```bash
-xz -dc 'out/vyos-<版本>-radxa-cubie-a5e.img.xz' | sudo dd of=/dev/sdX bs=4M conv=fsync status=progress
-```
-
-开机即用:网口默认 DHCP 并开启 SSH —— 上电插网线就能 `ssh vyos@<分到的地址>`,无需先接串口。默认账户 `vyos / vyos`。
-
-每次构建除整盘镜像外,还会在 `out/` 产出一份每款设备的 `.iso`。已经在跑的设备可用 VyOS 原生的 `add system image <文件>` 安装新镜像:多版本共存、迁移配置与 SSH 密钥、保留旧镜像供回退。额外安装的软件及 `/etc`、`/var/lib` 中的自定义文件不会自动迁移;升级前须单独备份并在新镜像中重新部署。ISO 升级不更新存储介质保留区的 U-Boot。
-
-版本维护、容器构建边界与验收要求见 [维护与构建](docs/maintenance.md)。支持表记录历史真机结果,不代表每次新版本都已经通过真机验收。
-
-## 工作原理
-
-构建分两段:**家族共享、只算一次**的内核与基础镜像;**每款设备各自一份**的 U-Boot 与专属资产,在本机快速注入。
-
-| 环节 | 在哪里运行 | 产物 |
-| :-- | :-- | :-- |
-| 内核 | arm64 容器 / 本机交叉编译 | 官方内核源 + 各 SoC 家族驱动配置片段 → 签名内核包 |
-| 基础镜像 | arm64 容器 | 官方组装工具 → 不含任何设备专属内容的通用镜像 |
-| 设备资产 | 本机交叉编译 | 该设备专属的内核模块、固件、二进制(仅相关设备) |
-| U-Boot | 本机交叉编译 | 主线 U-Boot + 家族固件（Rockchip 用 rkbin blob,Allwinner 现编 TF-A BL31） |
-| 整盘镜像 | 本机 | 解包基础镜像 → 注入本设备资产 → 重新打包 → 写入分区表与引导 |
-
-基础镜像对所有设备一视同仁,差异留到最后一步注入。所以换一款设备、改一处命名,只需重跑本机这几分钟的步骤,不必重建慢速的容器镜像。
-
-启动链路:BootROM → U-Boot → GRUB（EFI）→ 内核 + initrd。引导结构由 VyOS 官方代码生成,系统内置的镜像升级、默认启动项切换等命令均可正常使用。内核与基础镜像都带输入指纹:相关定制一改,下次构建自动重建对应产物,不会用到过期缓存。
-
-## 新增一款设备
-
-以 MangoPi M28K 为例,全程只是往约定目录放文件,不动构建脚本:
-
-| 放在哪里 | 放什么 |
-| :-- | :-- |
-| `boards/<设备>/board.conf` | SoC、U-Boot 配置、串口、内核 DTB 等声明 |
-| `boards/<设备>/uboot/` | 上游无现成配置时,该设备的 U-Boot 源 |
-| `boards/<设备>/overlay/` | 该设备的内核补丁与设备树 |
-| `boards/<设备>/rootfs/` | 该设备的根文件系统补充(如网口命名) |
-| `families/<家族>.conf` | 新 SoC 家族时才需要:启动固件来源、产物名、写盘偏移（Rockchip、Allwinner 已有） |
-| `Makefile` | 在设备列表里加上名字 |
-
-内核与基础镜像是共享的:某款设备的设备树补丁进入同一个内核(默认关闭的节点对其他设备没有影响),专属内容在最后注入。
-
-## 持续集成
-
-`.github/workflows/build.yml` 使用 GitHub 原生 arm64 运行器(无需 qemu 模拟),手动触发选设备即出镜像。源码、内核、构建容器三处均有缓存。
-
-## 目录结构
-
-```
-build.conf          可调参数（仓库、版本、镜像大小…,均可用环境变量覆盖）
-scripts/build.sh    唯一入口：编排各环节,支持 dry-run
-lib/                构建引擎（各环节一个脚本）
-overlay/            对 vyos-build 的全局定制,按目录原样注入
-boards/<设备>/      每款设备的声明与专属资产
-families/<家族>.conf SoC 家族的启动固件声明（rkbin blob / TF-A BL31、写盘偏移）
-resources/          容器内运行的官方 GRUB 生成器
-work/  中间产物                  out/  成品镜像
-```
-
-## 宿主环境
-
-Arch / CachyOS 参考依赖:`docker`、`qemu-user-static`、`aarch64-linux-gnu-gcc`、`squashfs-tools`、`parted`、`dosfstools`、`e2fsprogs`、`xz`、`zstd`、`rsync`、`swig`、`python-pyelftools`、`debhelper`。运行 `make <设备>` 时,依赖检查环节会一次性列出所缺。
+当前默认构建 **A5E**，整盘格式为 **`.img.xz`**。系统升级 ISO 不会更新 SD / SPI 中的启动固件；A5E 的无 SD 启动需配套 SPI 固件。
 
 ## 许可
 
-构建脚本与设备适配以 **MIT** 发布。VyOS、Linux、U-Boot 等组件各自遵循其原始许可,构建出的镜像受 VyOS 自身条款约束。
+构建脚本与设备适配以 **MIT** 发布。VyOS、Linux、U-Boot 及其他组件遵循各自许可。
