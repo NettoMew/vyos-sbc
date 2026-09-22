@@ -15,7 +15,7 @@
 # 手动 insmod 会 -110（SDIO 已 idle），必须开机早期加载，故走 modules-load.d。
 
 AIC8800_REPO="${AIC8800_REPO:-https://github.com/radxa-pkg/aic8800.git}"
-# 2026-09-02 Radxa 包装版本；src/ 与原 89f865b 完全相同，沿用板级 SDIO 补丁。
+# 2026-09-02 Radxa 包装版本；只对所构建的 SDIO transport 应用共享兼容补丁。
 # 此构建不执行 Debian quilt，不能把上游 debian/patches 的更新视为已应用。
 AIC8800_COMMIT="${AIC8800_COMMIT:-516e3b087763d80c44f5e3b6d2dd63e0d925c91d}"
 AIC8800_SRC="${WORK_DIR}/src/aic8800"
@@ -37,13 +37,16 @@ stage_aic8800() {
   [[ -f "${kdir}/Module.symvers" ]] || fatal "内核树未编（${kdir} 缺 Module.symvers）；aic8800 必须在 kernel 阶段后"
   [[ -f "${kdir}/certs/signing_key.pem" ]] || fatal "内核 signing_key 缺失，无法签名模块（过不了 MODULE_SIG_FORCE）"
 
-  # 1) 取源 + 补丁（0001 port + 0002 6.18 适配）
+  [[ -s "${kdir}/include/config/kernel.release" ]] || fatal "内核 kernel.release 缺失，请先完成 kernel 阶段"
+  krel="$(<"${kdir}/include/config/kernel.release")"
+
+  # 1) 取源 + 共享 SDIO 补丁，再应用可选板级补丁。
   run mkdir -p "${WORK_DIR}/src"
   git_clone_shallow "${AIC8800_REPO}" "${AIC8800_COMMIT}" "${AIC8800_SRC}" \
     || fatal "aic8800 源码获取失败"
   run git -C "${AIC8800_SRC}" checkout -- .
   local p
-  for p in "${BOARDS_DIR}/${BOARD}/aic8800/"*.patch; do
+  for p in "${PROJECT_ROOT}/vendor/aic8800/"*.patch "${BOARDS_DIR}/${BOARD}/aic8800/"*.patch; do
     [[ -f "${p}" ]] || continue
     log "git apply $(basename "${p}")"
     git -C "${AIC8800_SRC}" apply "${p}" || fatal "aic8800 补丁失败：$(basename "${p}")"
@@ -52,15 +55,17 @@ stage_aic8800() {
   # 2) 交叉编模块（LOCALVERSION=-vyos 对齐内核 vermagic；wifi-only）
   local drv="${AIC8800_SRC}/${AIC8800_DRV_SUBDIR}"
   run make -C "${kdir}" M="${drv}" ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- -j"${JOBS}" \
-    LOCALVERSION=-vyos CONFIG_SDIO_BT=n CONFIG_AIC8800_BTLPM_SUPPORT=n \
+    LOCALVERSION=-vyos KERNELRELEASE="${krel}" CONFIG_SDIO_BT=n CONFIG_AIC8800_BTLPM_SUPPORT=n \
     CONFIG_AIC_FW_PATH="\"${AIC8800_FW_DEST}\"" modules
   local bsp="${drv}/aic8800_bsp/aic8800_bsp.ko" fdrv="${drv}/aic8800_fdrv/aic8800_fdrv.ko"
   [[ -f "${bsp}" && -f "${fdrv}" ]] || [[ "${DRY_RUN:-0}" == "1" ]] || fatal "aic8800 .ko 未编出"
 
   # 3) 签名（内核 signing_key + sha512，过 MODULE_SIG_FORCE）
-  krel="$(make -s -C "${kdir}" LOCALVERSION=-vyos kernelrelease)"
   local ko
   for ko in "${bsp}" "${fdrv}"; do
+    [[ "$(modinfo -F vermagic "${ko}")" == "${krel} "* ]] || fatal "aic8800 vermagic 与目标内核不符"
+    # Strip before signing: stripping a signed module invalidates its signature.
+    run aarch64-linux-gnu-strip --strip-debug "${ko}"
     run "${kdir}/scripts/sign-file" sha512 \
       "${kdir}/certs/signing_key.pem" "${kdir}/certs/signing_key.x509" "${ko}"
   done
@@ -70,10 +75,18 @@ stage_aic8800() {
   run rm -rf "${inc}/lib/modules/${krel}/updates/aic8800" "${inc}${AIC8800_FW_DEST}"
   run mkdir -p "${inc}/lib/modules/${krel}/updates/aic8800" "${inc}${AIC8800_FW_DEST}" "${inc}/etc/modules-load.d"
   run cp "${bsp}" "${fdrv}" "${inc}/lib/modules/${krel}/updates/aic8800/"
-  local d
-  for d in "${AIC8800_SRC}/${AIC8800_FW_SUBDIR}"/*/; do
-    [[ -d "${d}" ]] && run cp -a "${d}"* "${inc}${AIC8800_FW_DEST}/" 2>/dev/null || true
-  done
+  local d variant="${BOARD_AIC8800_FW_VARIANT:-}"
+  if [[ -n "${variant}" ]]; then
+    [[ "${variant}" =~ ^aic8800[A-Za-z0-9]*$ ]] || fatal "非法 AIC8800 固件 variant：${variant}"
+    d="${AIC8800_SRC}/${AIC8800_FW_SUBDIR}/${variant}"
+    [[ -d "${d}" ]] || fatal "缺少 AIC8800 固件目录：${variant}"
+    run cp -a "${d}/." "${inc}${AIC8800_FW_DEST}/"
+  else
+    for d in "${AIC8800_SRC}/${AIC8800_FW_SUBDIR}"/*/; do
+      [[ -d "${d}" ]] || continue
+      run cp -a "${d}/." "${inc}${AIC8800_FW_DEST}/"
+    done
+  fi
   printf 'aic8800_bsp\naic8800_fdrv\n' > "${WORK_DIR}/aic8800-modload.conf"
   run cp "${WORK_DIR}/aic8800-modload.conf" "${inc}/etc/modules-load.d/aic8800.conf"
   log "AIC8800 模块(已签)+固件+modules-load.d → ${inc}（krel=${krel}）。image 阶段注入并 depmod。"

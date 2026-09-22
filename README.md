@@ -35,6 +35,7 @@ make a5e-dry     # 只看构建计划与缓存状态（不构建、不联网、�
 A5E 的 U-Boot/USB DMA/网口命名修复与验证边界见 [启动调查](docs/a5e-bringup.md)。
 PCIe RC / ComboPHY 与固件设备树的配套修复见 [A5E PCIe](docs/a5e-pcie.md)。
 NVMe 安装、SD/NVMe 介质隔离和当前验证边界见 [SD / NVMe 启动](docs/a5e-nvme-boot.md)。
+AIC8800 驱动进度见 [A5E Wi-Fi](docs/a5e-wifi.md)：SD 及无 SD 的 NVMe 冷启动／重启驱动验收通过；STA／AP 网络配置由 VyOS 负责。
 本轮修复必须安装完整 `.img.xz`；`add system image` 的 ISO 升级不会更新 U-Boot。
 
 ```bash

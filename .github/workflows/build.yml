@@ -20,7 +20,7 @@ on:
         options: [r5s, m28k, e20c, e52c, a5e]
         default: a5e
       kernel_mode:
-        description: "内核构建方式（cross=宿主交叉,快;container=官方容器流程,正常但慢。带 out-of-tree 驱动的 m28k/r5s/e52c 只能 cross；e20c/a5e 两者皆可）"
+        description: "内核构建方式（cross=宿主交叉;container=官方容器。A5E/m28k/r5s/e52c 的外置驱动需要 cross；e20c 两者皆可）"
         type: choice
         options: [cross, container]
         default: cross
@@ -53,14 +53,12 @@ jobs:
       # 阶段失败 → 早退并给清楚提示,省得白跑。
       - name: Validate kernel mode vs board
         run: |
-          case "$BOARD" in
-            e20c|a5e) ;;   # 纯主线、无 out-of-tree 驱动：container 也可
-            *)
-              if [ "$KERNEL_BUILD_MODE" = "container" ]; then
-                echo "::error::container（正常）模式不支持 $BOARD —— 它带 out-of-tree 驱动（m28k=aic8800 / r5s,e52c=r8125）,需要宿主侧内核树,请改用 cross。当前只有 e20c/a5e 可走 container。"
-                exit 1
-              fi ;;
-          esac
+          source "boards/$BOARD/board.conf"
+          if [[ "$KERNEL_BUILD_MODE" == container &&
+                ( "${BOARD_WIFI_AIC8800:-0}" == 1 || "${BOARD_R8125:-0}" == 1 ) ]]; then
+            echo "::error::$BOARD 的外置驱动需要宿主侧内核树和签名密钥，请使用 cross。"
+            exit 1
+          fi
 
       # GHA runner 根盘默认空闲偏小（~14GB），本构建峰值约需 25–40GB。
       - name: Free disk space
@@ -98,6 +96,7 @@ jobs:
           python3 tests/a5e-pcie.py
           sudo python3 tests/boot-media.py
           python3 tests/net-tune.py
+          python3 tests/aic8800.py
           for script in lib/*.sh scripts/*.sh tests/*.sh; do bash -n "$script"; done
           shellcheck -S warning -x lib/{sources,kernel,iso,uboot,builder,r8125,aic8800,deps,overlay,image,imgiso}.sh scripts/docker-build.sh tests/*.sh
 
@@ -173,6 +172,9 @@ jobs:
             --kernel-config "$tmp"/boot/config-*-vyos \
             --kernel-dtb "$tmp"/usr/lib/linux-image-*-vyos/allwinner/sun55i-a527-cubie-a5e.dtb \
             --uboot-config work/src/u-boot/.config \
+            --uboot-dtb work/src/u-boot/u-boot.dtb
+          python3 tests/aic8800.py \
+            --kernel-dtb "$tmp"/usr/lib/linux-image-*-vyos/allwinner/sun55i-a527-cubie-a5e.dtb \
             --uboot-dtb work/src/u-boot/u-boot.dtb
 
       - name: Upload image

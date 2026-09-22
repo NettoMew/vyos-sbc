@@ -1,0 +1,19 @@
+AIC8800 SDIO: use cfg80211 regulatory rules by default
+
+The vendor initializer enables custregd despite the parameter description
+claiming that it defaults to zero. That opts into the vendor self-managed
+domain instead of the kernel's regulatory database and user country
+selection. Use the documented, conservative default for both STA and AP.
+Do not select a country on behalf of the user or unlock extra channels.
+
+--- a/src/SDIO/driver_fw/driver/aic8800/aic8800_fdrv/rwnx_mod_params.c
++++ b/src/SDIO/driver_fw/driver/aic8800/aic8800_fdrv/rwnx_mod_params.c
+@@ -56,7 +56,7 @@
+ 	COMMON_PARAM(mutx_on, true, true)
+ 	COMMON_PARAM(use_80, false, false)
+ /* false: use crda(iw reg set CN); true: drive self-management(wifi_test wlan0 country_set CN) */
+-	COMMON_PARAM(custregd, true, true)
++	COMMON_PARAM(custregd, false, false)
+ 	COMMON_PARAM(custchan, false, false)
+ 	COMMON_PARAM(roc_dur_max, 500, 500)
+ 	COMMON_PARAM(listen_itv, 0, 0)

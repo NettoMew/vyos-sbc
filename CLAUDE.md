@@ -131,7 +131,8 @@ space"）；6.18 dwc 无 rk3528、靠 compatible fallback rk3568。141 给 gmac1
 local-mac-address（RK3528 无 fused MAC，否则每启随机、DHCP IP 漂移）。
 
 ## AIC8800 Wi-Fi（m28k，2026-06-13 真机验证 wlan0 up）
-驱动 radxa-pkg/aic8800@89f865b（SDIO）+ boards/m28k/aic8800/ 两补丁：0001=7.1 port
+历史驱动 radxa-pkg/aic8800@89f865b（SDIO）；当前固定 516e3b0，补丁已共享到
+vendor/aic8800/：0001=原 SDIO 7.1 port（去除未构建的 USB/PCIe hunks）
 （alpine 来），0002=我做的 6.18 适配（9 个 cfg80211 ops wireless_dev→net_device +
 体首 wdev=ndev->ieee80211_ptr、2 处 add_key/del_station 调用、cfg80211_new_sta/del_sta
 传 ndev、tdls_discover_resp 加一层 .u）。`stage_aic8800`（lib/aic8800.sh，在 kernel 后、
@@ -356,10 +357,13 @@ PCIe/ComboPHY/参考时钟必须由本板补丁补齐；固件传递的 DT 也�
   **待真机确认**：外壳 WAN/LAN 标号（含 PoE）↔ gmac0/gmac1；用户可显式交换 hw-id。
 - **LED**：DTS `green:power`（PL4，DT 默认 heartbeat）+ `blue:activity`（PL5，未绑）。
   `sbc-leds.sh` 的心跳列表加了 `green:power`（幂等重设）。
-- **不带**：r8125/aic8800/oled（无 out-of-tree 资产 → 与 e20c 同属 container 模式也能出镜像，
-  CI 校验放行 e20c|a5e）。板载 AIC8800 Wi-Fi 6（SDIO on mmc1）主线 DTS 无 mmc1/WiFi 节点，本版
-  不启用；要做时补 mmc1 DTS + `BOARD_WIFI_AIC8800=1` 复用 lib/aic8800.sh（m28k 的两补丁按板目录
-  `boards/a5e/aic8800/` 投放）。GPU/NPU 不编。
+- **Wi-Fi（2026-09-22）**：`BOARD_WIFI_AIC8800=1`，D80 固件，复用共享 SDIO
+  补丁及签名模块流程；内核 178/179、固件 0076/0077 配对启用 mmc1/PL7/PM1/BLDO1。
+  编译和配对 DT 合约通过；SD 正常启动已验证签名模块、固件、wlan0、AP/managed 类型
+  切换和三轮被动扫描。用户限定只验驱动，不配置 STA/AP 业务。SD/SPI 已更新 0077，
+  NVMe 驱动已部署，无 SD 的 SPI→NVMe 冷启动及重启均通过相同检查，扫描各 5/6/7 BSS。
+  1150 新整镜像未重刷验收，不把 0545 上的同组件验证冒充整镜像验证。见 docs/a5e-wifi.md。
+  A5E 现在需要 cross 内核树，不能再放行 container 完整计划。r8125/oled/GPU/NPU 不编。
 - **真机首跑风险点（按概率排序）**：① TF-A fork bl31 + U-Boot 2026.07 组合能否上电（Armbian 同组合
   在跑，风险低）；② U-Boot bootstd 在本板扫 ESP 起 grub（sunxi 走 EFI 与 RK 同路径）；③ gmac1
   在 6.18 驱动 + U-Boot 6.19 级 DT 下 probe（驱动读的 syscon/mbus/延时属性两边一致，已核对）；
@@ -458,7 +462,7 @@ IFF_UP 再调**（eth1 无网线也算 admin-up，最多 ~120s）。
 - 产物 `out/*.img.xz` 传 artifact。手动跑：`gh workflow run build-image -R <owner>/vyos-sbc -f board=a5e`。
 
 ## 内核两种构建模式（KERNEL_BUILD_MODE）
-container（默认）= 官方 build.py 进 arm64 容器；cross = 宿主机交叉 bindeb-pkg
+container = 官方 build.py 进 arm64 容器；cross（默认）= 宿主机交叉 bindeb-pkg
 （复刻 build-kernel.sh 语义：同补丁序、同 config 片段、同证书链、同版本号；
 不带 BUILD_TOOLS=perf——它在 arm64 有并行竞态且镜像不装）。cross 树在
 work/kernel/（host 属主），每次全新解包保证确定性。6.18 kbuild 的 debian/rules 已 debhelper 化 → 宿主机需 debhelper（Arch 走 AUR），且必须 DPKG_FLAGS=-d（Arch 无 dpkg 包数据库，checkbuilddeps 必误报）。迭代 DTS 用

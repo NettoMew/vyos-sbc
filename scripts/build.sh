@@ -39,7 +39,7 @@ while (($#)); do
     --dry-run)   DRY_RUN=1 ;;
     --stages)    STAGES_CSV="${2:?--stages 需要参数}"; shift ;;
     --stages=*)  STAGES_CSV="${1#*=}" ;;
-    -h|--help)   usage ;;
+    -h|--help)   usage 0 ;;
     -*)          fatal "未知参数：$1（--help 看用法）" ;;
     *)           [[ -z "${BOARD}" ]] || fatal "板名只能给一个：${BOARD} vs $1"
                  BOARD="$1" ;;
@@ -79,6 +79,14 @@ for m in env deps sources overlay builder kernel iso aic8800 r8125 oled uboot im
   # shellcheck source=/dev/null
   source "${LIB_DIR}/${m}.sh"
 done
+
+# Refuse an incompatible full plan before spending time building a container kernel.
+if [[ "${KERNEL_BUILD_MODE}" == container ]] && stage_planned kernel; then
+  if { [[ "${BOARD_WIFI_AIC8800:-0}" == 1 ]] && stage_planned aic8800; } ||
+     { [[ "${BOARD_R8125:-0}" == 1 ]] && stage_planned r8125; }; then
+    fatal "本板外置驱动需要宿主侧内核树和签名密钥，请设置 KERNEL_BUILD_MODE=cross"
+  fi
+fi
 
 # --- 计划摘要 -------------------------------------------------------------------
 section "构建计划"

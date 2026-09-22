@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # lib/kernel.sh — VyOS 内核 deb 构建，两种模式（KERNEL_BUILD_MODE 选择）：
 #
-#   container（默认）：官方 package-build/linux-kernel 流程原样在 arm64 容器里跑
+#   container        ：官方 package-build/linux-kernel 流程原样在 arm64 容器里跑
 #                      （qemu 仿真，慢但与官方构建环境零差异）。
-#   cross            ：宿主机交叉编译（aarch64-linux-gnu-，快一个量级）。复刻官方
+#   cross（默认）   ：宿主机交叉编译（aarch64-linux-gnu-，快一个量级）。复刻官方
 #                      build-kernel.sh 的语义——同一份补丁目录（ls 序）、同一组
 #                      config 片段（merge_config.sh）、同样的证书链与包版本号，
 #                      产物 deb 同名同版本。两点有意差异：① 不带 BUILD_TOOLS=1
