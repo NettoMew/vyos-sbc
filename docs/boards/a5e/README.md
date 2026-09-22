@@ -16,6 +16,7 @@ Allwinner A527，双千兆以太网，AIC8800D80 SDIO Wi-Fi。当前默认构建
 | 文档 | 内容 |
 | :-- | :-- |
 | [SD / NVMe 启动与恢复](boot.md) | 启动链、安装器、UUID 隔离、SPI 备份与恢复 |
+| [SPI 恢复包](spi-recovery.md) | 历史备份、新旧启动固件、校验与恢复注意事项 |
 | [PCIe / M.2](pcie.md) | 控制器、PHY、时序与 NVMe 验证记录 |
 | [AIC8800 Wi-Fi](wifi.md) | SDIO 供电、签名模块、固件及验收范围 |
 | [启动调查](bringup.md) | U-Boot、USB DMA、initramfs 与早期启动故障取证 |

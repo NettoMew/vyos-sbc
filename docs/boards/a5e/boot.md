@@ -89,6 +89,9 @@ sudo dmesg | grep -Ei 'nvme|pcie|timeout|corrupt|oops|panic'
 
 ## SPI：先完整备份，再定长更新，最后拔 SD 冷启动
 
+已公开的历史备份、两版启动固件及 SHA256 见 [SPI 恢复包](spi-recovery.md)。
+它们不能替代目标机器写入前的专属备份；全空备份不是可启动固件。
+
 SPI 固件与 SD 固件为同一个 `u-boot-sunxi-with-spl.bin`，但写入偏移不同：
 **SD 为 128 KiB；SPI 为 0**。不要把整盘 `.img` 写入 SPI，也不要把 SD 固件写到
 8 KiB 破坏 GPT。参考 [Radxa SPI 安装说明](https://docs.radxa.com/en/cubie/a5e/getting-started/install-system/nvme-system/burn-spi)。
@@ -97,6 +100,8 @@ SPI 固件与 SD 固件为同一个 `u-boot-sunxi-with-spl.bin`，但写入偏�
 电脑计算 SHA256。备份未落到另一台电脑前不执行擦写。
 固件必须核对该版本随附 SHA256；仅更新其实际字节数，随后 SPI 读回并逐字节比较。
 不要用整片擦除替代定长更新。
+`sf update` 的最后一个擦除块仍可能影响文件尾部以外的数据，必须预先检查并保护；
+详见恢复包说明，不能只检查固件自身的读回结果。
 
 **本机不要使用 U-Boot `fatwrite mmc` 传输大文件备份**：16 MiB 写入实测失败并损坏
 ESP 的 FAT 元数据，之后已先备份整个 ESP，再用 Linux fsck 修复，SD 启动验证通过。
