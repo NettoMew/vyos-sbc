@@ -10,7 +10,7 @@
 #
 # 为什么不靠 udev VYOS_IFNAME 预定义命名（像 RK3528 那样）：r8125 是 out-of-tree 模块、
 # 晚加载，其 add 事件在启动期 VyOS 的 udev 预定义命名不稳定应用（R5S 真机同款踩坑）。
-# 故用本服务在 vyos-router 之前**显式** ip-link 改名，绕开竞态。配套 60-rockchip-net.rules
+# 故用本服务在 vyos-router 之前**显式** ip-link 改名，绕开竞态。配套 60-sbc-net.rules
 # 设 VYOS_IFNAME="%k"（保持现名）防止 vyos_net_name 把口改回自动枚举名 e3/e4。
 # 仅 E52C 装（boards/e52c/rootfs/）。
 #

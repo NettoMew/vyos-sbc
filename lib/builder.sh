@@ -39,7 +39,7 @@ PY
 
 _builder_image_identity() {
   local image="$1" digest="$2" metadata arch id label
-  metadata="$(docker image inspect -f '{{.Os}}/{{.Architecture}} {{.Id}} {{index .Config.Labels "org.vyos-rockchip.builder-context-sha256"}}' "${image}" 2>/dev/null)" || return 1
+  metadata="$(docker image inspect -f '{{.Os}}/{{.Architecture}} {{.Id}} {{index .Config.Labels "org.vyos-sbc.builder-context-sha256"}}' "${image}" 2>/dev/null)" || return 1
   read -r arch id label <<< "${metadata}"
   [[ "${arch}" == linux/arm64 && "${id}" == sha256:* && "${label}" == "${digest}" ]] || return 1
   printf '%s\n' "${id}"
@@ -78,7 +78,7 @@ stage_builder() {
 
   log "本地构建容器镜像（qemu 仿真下较慢，一次性）"
   run docker build --platform linux/arm64 --build-arg ARCH=arm64v8/ \
-    --label "org.vyos-rockchip.builder-context-sha256=${digest}" \
+    --label "org.vyos-sbc.builder-context-sha256=${digest}" \
     -t "${BUILDER_IMAGE}" "${VYOS_BUILD_TREE}/docker" || return
   _builder_image_identity "${BUILDER_IMAGE}" "${digest}" >/dev/null || {
     fatal '构建后的 builder 架构或源码标签不匹配'; return 1;

@@ -122,16 +122,19 @@ cat > "${TMP}/bin/docker" <<'MOCK'
 printf '%s\0' "$@" >> "${DOCKER_CALLS}"
 if [[ "$*" == *'image inspect -f {{.Id}}'* ]]; then
   printf 'sha256:%064d\n' 1
+elif [[ "$*" == *'.RootFS.Layers'* ]]; then
+  printf 'sha256:fixture-layer\n'
 fi
 MOCK
 chmod +x "${TMP}/bin/docker"
 DOCKER_CALLS="${TMP}/wrapper-calls" PATH="${TMP}/bin:${PATH}" \
   WORK_DIR="${TMP}/work with spaces" OUT_DIR="${TMP}/output" \
-  JOBS=6 BUILD_CPUS=8 BUILD_MEMORY=12g REBUILD_KERNEL=1 KERNEL_BUILD_MODE='' BUILD_HOST_IMAGE_ID=forged \
+  JOBS=6 BUILD_CPUS=8 BUILD_MEMORY=12g REBUILD_KERNEL=1 XZ_LEVEL=1 KERNEL_BUILD_MODE='' BUILD_HOST_IMAGE_ID=forged \
   GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=safe.directory GIT_CONFIG_VALUE_0='*' \
   bash "${ROOT}/scripts/docker-build.sh" e20c --stages kernel
 python3 - "${TMP}/wrapper-calls" "${ROOT}" "${TMP}" <<'PY'
 from pathlib import Path
+import hashlib
 import sys
 
 args = Path(sys.argv[1]).read_bytes().decode().split("\0")[:-1]
@@ -145,13 +148,16 @@ pair("-e", "JOBS=6")
 pair("-e", "BUILDER_CPUS=8")
 pair("-e", "BUILDER_MEMORY=12g")
 pair("-e", "REBUILD_KERNEL")
+pair("-e", "XZ_LEVEL")
 pair("-e", "KERNEL_BUILD_MODE=cross")
 identity = "sha256:" + "1".zfill(64)
-pair("-e", "BUILD_HOST_IMAGE_ID=" + identity)
+# Cache identity uses RootFS layers, while docker run still pins the image ID.
+cache_identity = "rootfs:" + hashlib.sha256(b"sha256:fixture-layer\n").hexdigest()
+pair("-e", "BUILD_HOST_IMAGE_ID=" + cache_identity)
 assert "BUILD_HOST_IMAGE_ID=forged" not in args
 pair(identity, "bash")
 safe = [str(Path(root).resolve()), str(Path(temporary + "/work with spaces/vyos-build").resolve())]
-safe += [str(Path(temporary + "/work with spaces/src/" + name).resolve()) for name in ("u-boot", "rkbin", "rtl8125", "aic8800")]
+safe += [str(Path(temporary + "/work with spaces/src/" + name).resolve()) for name in ("u-boot", "rkbin", "arm-trusted-firmware", "aic8800")]
 pair("-e", "GIT_CONFIG_COUNT=6")
 for i, path in enumerate(safe):
     pair("-e", f"GIT_CONFIG_KEY_{i}=safe.directory")

@@ -1,0 +1,24 @@
+Subject: [PATCH] sunxi: cubie-a5e: use the reference board's 936 MHz DRAM clock
+
+The user's bootable Armbian image includes its actual U-Boot defconfig
+and full .config. They explicitly select DRAM_CLK=936; all other DRAM
+drive, ODT and TPR settings match the pinned mainline A5E defconfig.
+Without this entry mainline selects 1200 MHz, an unvalidated change for
+this board. Match the bootable reference instead of relying on that default.
+
+Reference: Armbian build 0648ff3c4125d673c18b5f032dc7c28545c542b5,
+linux-u-boot-current-radxa-cubie-a5e/u-boot-config-target-1 from the
+user-provided 26.11.0-trunk.52 image. Only boot-critical SD/DRAM fixes
+are imported; unrelated SPI/NVMe/PCIe enablement is not required here.
+
+diff --git a/configs/radxa-cubie-a5e_defconfig b/configs/radxa-cubie-a5e_defconfig
+--- a/configs/radxa-cubie-a5e_defconfig
++++ b/configs/radxa-cubie-a5e_defconfig
+@@ -2,6 +2,7 @@ CONFIG_ARM=y
+ CONFIG_ARCH_SUNXI=y
+ CONFIG_DEFAULT_DEVICE_TREE="allwinner/sun55i-a527-cubie-a5e"
+ CONFIG_SPL=y
++CONFIG_DRAM_CLK=936
+ CONFIG_DRAM_SUNXI_DX_ODT=0x07070707
+ CONFIG_DRAM_SUNXI_DX_DRI=0x0d0d0d0d
+ CONFIG_DRAM_SUNXI_CA_DRI=0x0e0e

@@ -1,0 +1,335 @@
+From: VyOS SBC maintainers
+Subject: [PATCH] A5E: SD/SPI NVMe boot with Linux DT and bounded DMA handoff
+
+Keep one PCIe binding for U-Boot and Linux; do not drive WAKE# or
+claim lane-selector GPIOs already owned by the board regulators.
+Propagate link and Identify failures. Quiesce NVMe and reset the root
+port at EFI ExitBootServices, including the failed-probe path.
+Enable SPI SPL, SPI flash commands and NVMe while retaining SD rescue.
+
+diff --git a/drivers/pci/pcie-sun55i-plat.c b/drivers/pci/pcie-sun55i-plat.c
+--- a/drivers/pci/pcie-sun55i-plat.c
++++ b/drivers/pci/pcie-sun55i-plat.c
+@@ -279,19 +279,7 @@
+ 	struct sun55i_pcie *pci = dev_get_priv(dev);
+ 	int ret;
+ 
+-	if (dm_gpio_is_valid(&pci->wake_gpio)) {
+-        ret = dm_gpio_set_value(&pci->wake_gpio, 1);
+-        if (ret) {
+-            printf("PCIe: Failed to set wake GPIO: %d\n", ret);
+-            return ret;
+-        }
+-    }
+-
+-	ret = dm_gpio_set_value(&pci->switch_gpio, 1);
+-	if (ret) {
+-		printf("PCIe: Failed to set switch GPIO: %d\n", ret);
+-		return ret;
+-	}
++	/* WAKE# is an input; the lane-switch fixed regulators own PB6/PB7. */
+ 
+ 	ret = regulator_set_enable(pci->slot_3v3, true);
+ 	if (ret && ret != -EALREADY) {
+@@ -388,12 +376,6 @@
+ 		pci->link_gen = 2;
+ 	}
+ 
+-	ret = gpio_request_by_name(dev, "switch-sel-gpios", 0, &pci->switch_gpio, GPIOD_IS_OUT);
+-	if (ret) {
+-		printf("PCIe: Failed to get switch-sel GPIO: %d\n", ret);
+-		return ret;
+-	}
+-
+ 	ret = gpio_request_by_name(dev, "reset-gpios", 0, &pci->rst_gpio,
+                                GPIOD_IS_OUT);
+     if (ret) {
+@@ -402,12 +384,12 @@
+     }
+ 
+     ret = gpio_request_by_name(dev, "wake-gpios", 0, &pci->wake_gpio,
+-                               GPIOD_IS_OUT);
++                               GPIOD_IS_IN);
+     if (ret) {
+         printf("PCIe: Warning: Failed to get wake-gpios: %d\n", ret);
+     }
+ 
+-	ret = device_get_supply_regulator(dev, "slot-3v3-supply", &pci->slot_3v3);
++	ret = device_get_supply_regulator(dev, "pcie3v3-supply", &pci->slot_3v3);
+ 	if (ret) {
+ 		printf("PCIe: Failed to get 3.3V slot supply: %d\n", ret);
+ 		return ret;
+diff --git a/drivers/pci/pcie-sun55i.c b/drivers/pci/pcie-sun55i.c
+--- a/drivers/pci/pcie-sun55i.c
++++ b/drivers/pci/pcie-sun55i.c
+@@ -293,7 +293,7 @@
+ 			printf("pcie link up success\n");
+ 			return 0;
+ 		}
+-		mdelay(1);
++		mdelay(10);
+ 	}
+ 
+ 	return -ETIMEDOUT;
+@@ -368,7 +368,7 @@
+     return 0;
+ }
+ 
+-static void sun55i_pcie_host_init(struct udevice *dev)
++static int sun55i_pcie_host_init(struct udevice *dev)
+ {
+ 	struct sun55i_pcie *pci = dev_get_priv(dev);
+ 
+@@ -376,9 +376,22 @@
+     
+ 	sun55i_pcie_host_setup_rc(&pci->pcie_port);
+ 
+-	sun55i_pcie_host_establish_link(pci);
+-
+-	sun55i_pcie_host_speed_change(pci, pci->link_gen);
++	if (sun55i_pcie_host_establish_link(pci))
++		return -ENOLINK;
++
++	return sun55i_pcie_host_speed_change(pci, pci->link_gen);
++}
++
++/* Children quiesce first. PERST# also fences a failed/unbound endpoint. */
++static int sun55i_pcie_remove(struct udevice *dev)
++{
++	struct sun55i_pcie *pci = dev_get_priv(dev);
++
++	dm_gpio_set_value(&pci->rst_gpio, 0);
++	sun55i_pcie_plat_ltssm_disable(pci);
++	generic_phy_exit(&pci->phy);
++	clk_disable(&pci->pcie_aux);
++	return 0;
+ }
+ 
+ static int sun55i_pcie_probe(struct udevice *dev)
+@@ -450,11 +463,11 @@
+ 	printf("PCIe: CFG  region: 0x%08x-0x%08x\n", data->cfg_addr, data->cfg_addr + data->cfg_size);
+ 	printf("PCIe: Lanes: %d, Max Speed: Gen%d\n", data->num_lanes, data->max_link_speed);
+ 
+-	sun55i_pcie_host_init(dev);
+-	
++	ret = sun55i_pcie_host_init(dev);
+ 	sun55i_pcie_dbi_ro_wr_dis(pci);
+-
+-	return 0;
++	if (ret)
++		sun55i_pcie_remove(dev);
++	return ret;
+ }
+ 
+ static const struct dm_pci_ops sun55i_pcie_ops = {
+@@ -482,7 +495,7 @@
+ 
+ static const struct udevice_id sun55i_pcie_ids[] = {
+ 	{
+-		.compatible = "allwinner,sun55i-pcie-v210-rc",
++		.compatible = "allwinner,sunxi-pcie-v210-rc",
+ 		.data = (ulong)&sun55i_pcie_rc_v210_of_data,
+ 	},
+ 	{ }
+@@ -494,5 +507,7 @@
+ 	.of_match		= sun55i_pcie_ids,
+ 	.ops			= &sun55i_pcie_ops,
+ 	.probe			= sun55i_pcie_probe,
++	.remove			= sun55i_pcie_remove,
++	.flags			= DM_FLAG_OS_PREPARE,
+ 	.priv_auto 	= sizeof(struct sun55i_pcie),
+ };
+diff --git a/drivers/phy/allwinner/phy-sun55i-pcie-usb3.c b/drivers/phy/allwinner/phy-sun55i-pcie-usb3.c
+--- a/drivers/phy/allwinner/phy-sun55i-pcie-usb3.c
++++ b/drivers/phy/allwinner/phy-sun55i-pcie-usb3.c
+@@ -579,7 +579,8 @@
+     ret = reset_deassert(&combphy->reset);
+     if (ret) {
+         printf("PHY: Failed to deassert reset: %d\n", ret);
+-        regulator_set_enable(combphy->select3v3_supply, false);
++        if (combphy->select3v3_supply)
++            regulator_set_enable(combphy->select3v3_supply, false);
+         return ret;
+     }
+ 
+@@ -587,7 +588,8 @@
+     if (ret) {
+         printf("PHY: failed to init sub system\n");
+         reset_assert(&combphy->reset);
+-        regulator_set_enable(combphy->select3v3_supply, false);
++        if (combphy->select3v3_supply)
++            regulator_set_enable(combphy->select3v3_supply, false);
+         return ret;
+     }
+ 
+@@ -595,7 +597,8 @@
+     if (ret) {
+         printf("PHY: invalid number of arguments\n");
+         reset_assert(&combphy->reset);
+-        regulator_set_enable(combphy->select3v3_supply, false);
++        if (combphy->select3v3_supply)
++            regulator_set_enable(combphy->select3v3_supply, false);
+         return ret;
+     }
+ 
+@@ -623,9 +626,7 @@
+ 	if (ret)
+ 		return ret;
+ 
+-	ret = device_get_supply_regulator(dev, "select3v3-supply", &combphy->select3v3_supply);
+-	if (ret)
+-		return ret;
++	/* Board lane selection is owned by fixed regulators, as in Linux. */
+ 
+ 	combphy->drvdata = (const struct sun55i_combophy_of_data *)dev_get_driver_data(dev);
+ 	combphy->user = PHY_USE_BY_PCIE;
+@@ -635,8 +636,19 @@
+ 	return 0;
+ }
+ 
++static int sun55i_combphy_exit(struct phy *phy)
++{
++	struct sun55i_combphy *combphy = dev_get_priv(phy->dev);
++
++	combo_phy_mode_set(combphy, false);
++	combo_pcie_clk_set(combphy, false);
++	combphy->initialized = false;
++	return reset_assert(&combphy->reset);
++}
++
+ static const struct phy_ops sun55i_inno_phy_ops = {
+ 	.init		= sun55i_combphy_init,
++	.exit		= sun55i_combphy_exit,
+ };
+ 
+ static const struct udevice_id sun55i_inno_phy_of_match_table[] = {
+diff --git a/drivers/nvme/nvme_pci.c b/drivers/nvme/nvme_pci.c
+--- a/drivers/nvme/nvme_pci.c
++++ b/drivers/nvme/nvme_pci.c
+@@ -7,6 +7,7 @@
+ #include <dm.h>
+ #include <init.h>
+ #include <pci.h>
++#include <nvme.h>
+ #include "nvme.h"
+ 
+ static int nvme_bind(struct udevice *udev)
+@@ -23,6 +24,7 @@
+ {
+ 	struct nvme_dev *ndev = dev_get_priv(udev);
+ 	struct pci_child_plat *pplat;
++	int ret;
+ 
+ 	pplat = dev_get_parent_plat(udev);
+ 	sprintf(ndev->vendor, "0x%.4x", pplat->vendor);
+@@ -34,7 +36,21 @@
+ 	/* Turn on bus-mastering */
+ 	dm_pci_clrset_config16(udev, PCI_COMMAND, 0, PCI_COMMAND_MASTER);
+ 
+-	return nvme_init(udev);
++	ret = nvme_init(udev);
++	if (ret)
++		dm_pci_clrset_config16(udev, PCI_COMMAND, PCI_COMMAND_MASTER, 0);
++	return ret;
++}
++
++static int nvme_pci_remove(struct udevice *udev)
++{
++	int ret = nvme_shutdown(udev);
++
++	/* Fence DMA even if firmware shutdown times out. Never leak it into EFI. */
++	dm_pci_clrset_config16(udev, PCI_COMMAND, PCI_COMMAND_MASTER, 0);
++	if (ret)
++		printf("NVMe shutdown failed (%d); bus mastering disabled\n", ret);
++	return 0;
+ }
+ 
+ U_BOOT_DRIVER(nvme) = {
+@@ -42,6 +58,8 @@
+ 	.id	= UCLASS_NVME,
+ 	.bind	= nvme_bind,
+ 	.probe	= nvme_probe,
++	.remove	= nvme_pci_remove,
++	.flags	= DM_FLAG_OS_PREPARE,
+ 	.priv_auto	= sizeof(struct nvme_dev),
+ };
+ 
+diff --git a/drivers/nvme/nvme.c b/drivers/nvme/nvme.c
+--- a/drivers/nvme/nvme.c
++++ b/drivers/nvme/nvme.c
+@@ -892,7 +892,9 @@
+ 		goto free_prp_pool;
+ 	}
+ 
+-	nvme_get_info_from_identify(ndev);
++	ret = nvme_get_info_from_identify(ndev);
++	if (ret)
++		goto free_prp_pool;
+ 
+ 	/* Create a blk device for each namespace */
+ 
+@@ -945,8 +947,14 @@
+ free_id:
+ 	free(id);
+ free_prp_pool:
++	nvme_disable_ctrl(ndev);
+ 	free((void *)ndev->prp_pool);
++	nvme_free_queues(ndev, 0);
++	free((void *)ndev->queues);
++	return ret;
+ free_queue:
++	nvme_disable_ctrl(ndev);
++	nvme_free_queues(ndev, 0);
+ 	free((void *)ndev->queues);
+ free_nvme:
+ 	return ret;
+diff --git a/configs/radxa-cubie-a5e_defconfig b/configs/radxa-cubie-a5e_defconfig
+--- a/configs/radxa-cubie-a5e_defconfig
++++ b/configs/radxa-cubie-a5e_defconfig
+@@ -34,3 +34,18 @@
+ CONFIG_AXP_DCDC3_VOLT=1100
+ CONFIG_USB_EHCI_HCD=y
+ CONFIG_USB_OHCI_HCD=y
++CONFIG_PCI=y
++CONFIG_CMD_PCI=y
++CONFIG_PCIE_SUN55I_RC=y
++CONFIG_PHY_SUN55I_PCIE_USB3=y
++CONFIG_NVME_PCI=y
++CONFIG_CMD_NVME=y
++CONFIG_DM_REGULATOR_FIXED=y
++CONFIG_SPI=y
++CONFIG_DM_SPI=y
++CONFIG_SPI_SUNXI=y
++CONFIG_SPI_FLASH=y
++CONFIG_DM_SPI_FLASH=y
++CONFIG_SPI_FLASH_WINBOND=y
++CONFIG_CMD_SF=y
++CONFIG_SPL_SPI_SUNXI=y
+diff --git a/dts/upstream/src/arm64/allwinner/sun55i-a527-cubie-a5e.dts b/dts/upstream/src/arm64/allwinner/sun55i-a527-cubie-a5e.dts
+--- a/dts/upstream/src/arm64/allwinner/sun55i-a527-cubie-a5e.dts
++++ b/dts/upstream/src/arm64/allwinner/sun55i-a527-cubie-a5e.dts
+@@ -431,3 +431,24 @@
+ 	pcie3v3-supply = <&reg_pcie_vcc3v3>;
+ 	status = "okay";
+ };
++
++/* BROM/SPL can load this same firmware from SPI; SD remains first in BROM. */
++&pio {
++	spi0_pins: spi0-pins {
++		pins = "PC2", "PC4", "PC12", "PC3";
++		function = "spi0";
++		allwinner,pinmux = <4>;
++		drive-strength = <10>;
++	};
++};
++
++&spi0 {
++	pinctrl-names = "default";
++	pinctrl-0 = <&spi0_pins>;
++	status = "okay";
++	flash@0 {
++		compatible = "jedec,spi-nor";
++		reg = <0>;
++		spi-max-frequency = <24000000>;
++	};
++};

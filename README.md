@@ -1,9 +1,9 @@
-# vyos-rockchip
+# vyos-sbc
 
-> 为 Rockchip 路由小主机构建开箱即用的 VyOS（rolling）整盘镜像。
-> 一套内核、一张基础镜像服务整个 RK3528 / RK3568 家族;新增一款机型,通常只是写一份配置、放几个文件。
+> 为 Rockchip / Allwinner 路由小主机构建开箱即用的 VyOS（rolling）整盘镜像。
+> 一套内核、一张基础镜像服务整个 RK3528 / RK3568 / RK3588 家族与 Allwinner A527;新增一款机型,通常只是写一份配置、放几个文件。
 
-VyOS 官方提供 arm64 软件源,却不带这些 Rockchip 设备的启动驱动。本项目在**不修改 vyos-build** 的前提下补齐内核、组装可直接 `dd` 烧录的整盘镜像,并把每款设备的差异收敛成清晰的声明式配置。
+VyOS 官方提供 arm64 软件源,却不带这些 Rockchip / Allwinner 设备的启动驱动。本项目在**不修改 vyos-build** 的前提下补齐内核、组装可直接 `dd` 烧录的整盘镜像,并把每款设备的差异收敛成清晰的声明式配置。
 
 ## 特性
 
@@ -20,18 +20,25 @@ VyOS 官方提供 arm64 软件源,却不带这些 Rockchip 设备的启动驱动
 | **MangoPi M28K** | RK3528 | 双千兆 · Wi-Fi 6 · OLED | 真机验证 |
 | **NanoPi R5S** | RK3568 | 千兆 WAN + 双 2.5G | 真机验证 |
 | **Radxa E52C** | RK3582 | 双 2.5G | 真机验证（开核 8 核） |
+| **Radxa Cubie A5E** | Allwinner A527 | 双千兆 | SD / NVMe 系统及读写、无 SD 的 SPI 冷启动/重启实测通过 |
 
 ## 快速开始
 
 ```bash
-make r5s          # 完整构建：依赖检查 → 取源 → 内核 → 基础镜像 → 设备资产 → U-Boot → 整盘镜像
-make r5s-dry      # 只看构建计划与缓存状态（不构建、不联网、不 sudo）
+make a5e         # 完整构建（当前默认）：依赖检查 → 取源 → 内核 → 基础镜像 → U-Boot → 整盘镜像
+make a5e-dry     # 只看构建计划与缓存状态（不构建、不联网、不 sudo）
 ```
 
-产物在 `out/`,直接烧录到 SD 卡或 eMMC:
+产物在 `out/`，整盘默认 `.img.xz`，可用 Etcher 直接打开，或先解压成 `.img` 再烧录。
+当前 bring-up 只构建 A5E；裸 `make` 默认也是 A5E，其他设备仍可显式指定。命令行烧录：
+
+A5E 的 U-Boot/USB DMA/网口命名修复与验证边界见 [启动调查](docs/a5e-bringup.md)。
+PCIe RC / ComboPHY 与固件设备树的配套修复见 [A5E PCIe](docs/a5e-pcie.md)。
+NVMe 安装、SD/NVMe 介质隔离和当前验证边界见 [SD / NVMe 启动](docs/a5e-nvme-boot.md)。
+本轮修复必须安装完整 `.img.xz`；`add system image` 的 ISO 升级不会更新 U-Boot。
 
 ```bash
-zstd -dc out/vyos-*-nanopi-r5s.img.zst | sudo dd of=/dev/sdX bs=4M conv=fsync status=progress
+xz -dc 'out/vyos-<版本>-radxa-cubie-a5e.img.xz' | sudo dd of=/dev/sdX bs=4M conv=fsync status=progress
 ```
 
 开机即用:网口默认 DHCP 并开启 SSH —— 上电插网线就能 `ssh vyos@<分到的地址>`,无需先接串口。默认账户 `vyos / vyos`。
@@ -46,10 +53,10 @@ zstd -dc out/vyos-*-nanopi-r5s.img.zst | sudo dd of=/dev/sdX bs=4M conv=fsync st
 
 | 环节 | 在哪里运行 | 产物 |
 | :-- | :-- | :-- |
-| 内核 | arm64 容器 / 本机交叉编译 | 官方内核源 + Rockchip 驱动配置 → 签名内核包 |
+| 内核 | arm64 容器 / 本机交叉编译 | 官方内核源 + 各 SoC 家族驱动配置片段 → 签名内核包 |
 | 基础镜像 | arm64 容器 | 官方组装工具 → 不含任何设备专属内容的通用镜像 |
 | 设备资产 | 本机交叉编译 | 该设备专属的内核模块、固件、二进制(仅相关设备) |
-| U-Boot | 本机交叉编译 | 主线 U-Boot + Rockchip 固件 |
+| U-Boot | 本机交叉编译 | 主线 U-Boot + 家族固件（Rockchip 用 rkbin blob,Allwinner 现编 TF-A BL31） |
 | 整盘镜像 | 本机 | 解包基础镜像 → 注入本设备资产 → 重新打包 → 写入分区表与引导 |
 
 基础镜像对所有设备一视同仁,差异留到最后一步注入。所以换一款设备、改一处命名,只需重跑本机这几分钟的步骤,不必重建慢速的容器镜像。
@@ -66,6 +73,7 @@ zstd -dc out/vyos-*-nanopi-r5s.img.zst | sudo dd of=/dev/sdX bs=4M conv=fsync st
 | `boards/<设备>/uboot/` | 上游无现成配置时,该设备的 U-Boot 源 |
 | `boards/<设备>/overlay/` | 该设备的内核补丁与设备树 |
 | `boards/<设备>/rootfs/` | 该设备的根文件系统补充(如网口命名) |
+| `families/<家族>.conf` | 新 SoC 家族时才需要:启动固件来源、产物名、写盘偏移（Rockchip、Allwinner 已有） |
 | `Makefile` | 在设备列表里加上名字 |
 
 内核与基础镜像是共享的:某款设备的设备树补丁进入同一个内核(默认关闭的节点对其他设备没有影响),专属内容在最后注入。
@@ -82,13 +90,14 @@ scripts/build.sh    唯一入口：编排各环节,支持 dry-run
 lib/                构建引擎（各环节一个脚本）
 overlay/            对 vyos-build 的全局定制,按目录原样注入
 boards/<设备>/      每款设备的声明与专属资产
+families/<家族>.conf SoC 家族的启动固件声明（rkbin blob / TF-A BL31、写盘偏移）
 resources/          容器内运行的官方 GRUB 生成器
 work/  中间产物                  out/  成品镜像
 ```
 
 ## 宿主环境
 
-Arch / CachyOS 参考依赖:`docker`、`qemu-user-static`、`aarch64-linux-gnu-gcc`、`squashfs-tools`、`parted`、`dosfstools`、`e2fsprogs`、`zstd`、`rsync`、`swig`、`python-pyelftools`、`debhelper`。运行 `make <设备>` 时,依赖检查环节会一次性列出所缺。
+Arch / CachyOS 参考依赖:`docker`、`qemu-user-static`、`aarch64-linux-gnu-gcc`、`squashfs-tools`、`parted`、`dosfstools`、`e2fsprogs`、`xz`、`zstd`、`rsync`、`swig`、`python-pyelftools`、`debhelper`。运行 `make <设备>` 时,依赖检查环节会一次性列出所缺。
 
 ## 许可
 

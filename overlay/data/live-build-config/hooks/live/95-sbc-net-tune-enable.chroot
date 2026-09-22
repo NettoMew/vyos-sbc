@@ -1,0 +1,10 @@
+#!/bin/sh
+# 启用板级 IRQ/XPS、UDP GRO forwarding 与 governor 设置，不覆盖 VyOS RPS/RFS。
+# 用 hook 在 chroot 内建 wants symlink（而非 includes.chroot 放 symlink——那会让
+# build-vyos-image 的 copytree 跟随绝对路径符号链接失败）。同 97-sbc-leds-enable。
+set -e
+[ -f /lib/systemd/system/sbc-net-tune.service ] || { echo "E: sbc-net-tune.service 缺失"; exit 1; }
+mkdir -p /etc/systemd/system/multi-user.target.wants
+ln -sf /lib/systemd/system/sbc-net-tune.service \
+    /etc/systemd/system/multi-user.target.wants/sbc-net-tune.service
+echo "I: sbc-net-tune.service enabled"

@@ -1,0 +1,157 @@
+From: VyOS SBC maintainers
+Subject: [PATCH] arm64: dts: A5E: describe Linux-owned PCIe and ComboPHY
+
+Adapted from Marvin Wewer's Armbian A523/A5E PCIe DT patches at
+0648ff3c4125d673c18b5f032dc7c28545c542b5 (GPL-2.0-only OR MIT).
+Only PCIe-related nodes are selected: no unrelated IOMMU, vendor usbc1,
+SPI or display changes. Retain the driver's Linux compatible, MSI/INTx
+interrupts, power domain, clock/reset references and board lane switch.
+Do not add the old firmware's duplicate PL11 pinctrl claim. WAKE# is an
+input. This tree is intentionally identical on both sides of EFI handoff;
+U-Boot does not initialize PCIe/NVMe and still performs SID MAC fixups.
+
+diff --git a/arch/arm64/boot/dts/allwinner/sun55i-a523.dtsi b/arch/arm64/boot/dts/allwinner/sun55i-a523.dtsi
+--- a/arch/arm64/boot/dts/allwinner/sun55i-a523.dtsi
++++ b/arch/arm64/boot/dts/allwinner/sun55i-a523.dtsi
+@@ -2,6 +2,7 @@
+ // Copyright (C) 2023-2024 Arm Ltd.
+ 
+ #include <dt-bindings/interrupt-controller/arm-gic.h>
++#include <dt-bindings/phy/phy.h>
+ #include <dt-bindings/clock/sun6i-rtc.h>
+ #include <dt-bindings/clock/sun55i-a523-ccu.h>
+ #include <dt-bindings/clock/sun55i-a523-mcu-ccu.h>
+@@ -601,6 +602,69 @@
+ 				compatible = "snps,dwmac-mdio";
+ 				#address-cells = <1>;
+ 				#size-cells = <0>;
++			};
++		};
++
++		combophy: phy@4f00000 {
++			compatible = "allwinner,inno-combphy";
++			reg = <0x04f00000 0x80000>, <0x04f80000 0x80000>;
++			reg-names = "phy-ctl", "phy-clk";
++			power-domains = <&pck600 PD_PCIE>;
++			phy_refclk_sel = <0>;
++			clocks = <&ccu CLK_USB3_REF>, <&ccu CLK_PLL_PERIPH0_200M>;
++			clock-names = "phyclk_ref", "refclk_par";
++			resets = <&ccu RST_BUS_PCIE_USB3>;
++			reset-names = "phy_rst";
++			#phy-cells = <1>;
++			status = "disabled";
++		};
++
++		pcie: pcie@4800000 {
++			compatible = "allwinner,sunxi-pcie-v210-rc";
++			#address-cells = <3>;
++			#size-cells = <2>;
++			bus-range = <0x0 0xff>;
++			reg = <0x04800000 0x480000>;
++			reg-names = "dbi";
++			device_type = "pci";
++			ranges = <0x00000800 0 0x20000000 0x20000000 0 0x01000000
++				  0x81000000 0 0x21000000 0x21000000 0 0x01000000
++				  0x82000000 0 0x22000000 0x22000000 0 0x0e000000>;
++			num-lanes = <1>;
++			phys = <&combophy PHY_TYPE_PCIE>;
++			phy-names = "pcie-phy";
++			interrupts = <GIC_SPI 107 IRQ_TYPE_LEVEL_HIGH>,
++				     <GIC_SPI 106 IRQ_TYPE_LEVEL_HIGH>,
++				     <GIC_SPI 98 IRQ_TYPE_LEVEL_HIGH>,
++				     <GIC_SPI 99 IRQ_TYPE_LEVEL_HIGH>,
++				     <GIC_SPI 100 IRQ_TYPE_LEVEL_HIGH>,
++				     <GIC_SPI 101 IRQ_TYPE_LEVEL_HIGH>,
++				     <GIC_SPI 102 IRQ_TYPE_LEVEL_HIGH>,
++				     <GIC_SPI 103 IRQ_TYPE_LEVEL_HIGH>,
++				     <GIC_SPI 104 IRQ_TYPE_LEVEL_HIGH>,
++				     <GIC_SPI 105 IRQ_TYPE_LEVEL_HIGH>;
++			interrupt-names = "msi", "sii", "edma-w0", "edma-w1", "edma-w2", "edma-w3",
++					  "edma-r0", "edma-r1", "edma-r2", "edma-r3";
++			#interrupt-cells = <1>;
++			interrupt-map-mask = <0 0 0 7>;
++			interrupt-map = <0 0 0 1 &pcie_intc 0>,
++					<0 0 0 2 &pcie_intc 1>,
++					<0 0 0 3 &pcie_intc 2>,
++					<0 0 0 4 &pcie_intc 3>;
++			num-edma = <4>;
++			max-link-speed = <2>;
++			num-ib-windows = <8>;
++			num-ob-windows = <8>;
++			linux,pci-domain = <0>;
++			power-domains = <&pck600 PD_PCIE>;
++			clocks = <&osc24M>, <&ccu CLK_PCIE_AUX>;
++			clock-names = "hosc", "pclk_aux";
++			status = "disabled";
++
++			pcie_intc: legacy-interrupt-controller {
++				interrupt-controller;
++				#address-cells = <0>;
++				#interrupt-cells = <1>;
+ 			};
+ 		};
+ 
+diff --git a/arch/arm64/boot/dts/allwinner/sun55i-a527-cubie-a5e.dts b/arch/arm64/boot/dts/allwinner/sun55i-a527-cubie-a5e.dts
+--- a/arch/arm64/boot/dts/allwinner/sun55i-a527-cubie-a5e.dts
++++ b/arch/arm64/boot/dts/allwinner/sun55i-a527-cubie-a5e.dts
+@@ -61,6 +61,41 @@
+ 		regulator-max-microvolt = <5000000>;
+ 		vin-supply = <&reg_vcc5v>;
+ 		gpio = <&r_pio 0 8 GPIO_ACTIVE_HIGH>;	/* PL8 */
++		enable-active-high;
++	};
++
++	/* M.2 slot power; GPIO ownership belongs only to this regulator. */
++	reg_pcie_vcc3v3: regulator-pcie-vcc3v3 {
++		compatible = "regulator-fixed";
++		regulator-name = "pcie-3v3";
++		regulator-min-microvolt = <3300000>;
++		regulator-max-microvolt = <3300000>;
++		regulator-enable-ramp-delay = <1000>;
++		regulator-always-on;
++		regulator-boot-on;
++		gpio = <&r_pio 0 11 GPIO_ACTIVE_HIGH>; /* PL11 */
++		enable-active-high;
++	};
++
++	/* Route the shared SuperSpeed lane to PCIe, as in Armbian's A5E DT. */
++	gma340_oe: gma340-oe {
++		compatible = "regulator-fixed";
++		regulator-name = "gma340-oe";
++		regulator-min-microvolt = <3300000>;
++		regulator-max-microvolt = <3300000>;
++		regulator-always-on;
++		regulator-boot-on;
++		gpio = <&pio 1 7 GPIO_ACTIVE_LOW>; /* PB7: /OE */
++	};
++
++	gma340_pcie: gma340-pcie {
++		compatible = "regulator-fixed";
++		regulator-name = "gma340-pcie";
++		regulator-min-microvolt = <3300000>;
++		regulator-max-microvolt = <3300000>;
++		regulator-always-on;
++		regulator-boot-on;
++		gpio = <&pio 1 6 GPIO_ACTIVE_HIGH>; /* PB6: select PCIe */
+ 		enable-active-high;
+ 	};
+ };
+@@ -357,3 +392,18 @@
+ 	usb1_vbus-supply = <&reg_usb_vbus>;
+ 	status = "okay";
+ };
++
++/* PCIe and USB3 share one PHY: USB2 remains available in PCIe mode. */
++&combophy {
++	phy_use_sel = <0>;
++	status = "okay";
++};
++
++&pcie {
++	reset-gpios = <&pio 7 11 GPIO_ACTIVE_HIGH>; /* PH11, driver uses raw levels */
++	wake-gpios = <&pio 7 12 GPIO_ACTIVE_LOW>; /* PH12: WAKE#, input */
++	num-lanes = <1>;
++	clk-freq-100M;
++	pcie3v3-supply = <&reg_pcie_vcc3v3>;
++	status = "okay";
++};

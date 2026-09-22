@@ -15,7 +15,9 @@ fixture() {
   LIB_DIR="${TMP}/lib"; OVERLAY_DIR="${TMP}/overlay"; BOARDS_DIR="${TMP}/boards"
   BOARD="test"; BOARD_UBOOT_DEFCONFIG=test_defconfig; BOARD_UNLOCK_CORES=0
   RKBIN_BL31=bl31; RKBIN_TPL=tpl; RKBIN_BL31_GLOB=bl31; RKBIN_TPL_GLOB=tpl
-  VYOS_VERSION="test-1"; BUILD_BY=builder; FLAVOR=rockchip; BUILDER_IMAGE="test"
+  # Boot-firmware family declaration (families/<name>.conf), as lib/env.sh sources it.
+  BOARD_FAMILY=rockchip; FAMILY_CONF="${ROOT}/families/rockchip.conf"; source "${FAMILY_CONF}"
+  VYOS_VERSION="test-1"; BUILD_BY=builder; FLAVOR=sbc; BUILDER_IMAGE="test"
   KERNEL_BUILD_MODE=container; JOBS=1; MOCK_BUILDER=sha256:one
   mkdir -p "${STATE_DIR}" "${LIB_DIR}" "${OVERLAY_DIR}" "${BOARDS_DIR}/test/overlay" "${ISO_KEEP_DIR}" "${UBOOT_OUT_DIR}"
   cp "${ROOT}/lib/"{sources,kernel,iso,uboot,overlay}.sh "${LIB_DIR}/"
@@ -117,6 +119,44 @@ uboot_cache_reuse() {
   stage_uboot
   echo changed >> "${RKBIN_SRC}/tpl"
   if ( stage_uboot ); then return 1; fi
+  [[ ! -e "${UBOOT_OUT_DIR}/inputs.sha256" ]]
+}
+
+uboot_required_patches() {
+  local pdir="${BOARDS_DIR}/${BOARD}/uboot/patches" before
+  mkdir -p "${pdir}/always"
+  cat > "${pdir}/always/0001-fix.patch" <<'PATCH'
+diff --git a/README b/README
+--- a/README
++++ b/README
+@@ -1 +1 @@
+-initial
++required-fix
+PATCH
+  cat > "${pdir}/0002-unlock.patch" <<'PATCH'
+diff --git a/README b/README
+--- a/README
++++ b/README
+@@ -1 +1 @@
+-required-fix
++required-fix-and-unlock
+PATCH
+  make() { touch "${UBOOT_SRC}/u-boot-rockchip.bin"; }
+  install() { cp "${UBOOT_SRC}/u-boot-rockchip.bin" "${UBOOT_OUT_DIR}/u-boot-rockchip.bin"; }
+  stage_uboot
+  [[ "$(cat "${UBOOT_SRC}/README")" == required-fix ]]
+  [[ ! -e "${UBOOT_SRC}/patches" ]]
+  before="$(uboot_inputs_digest)"
+  printf '\n' >> "${pdir}/always/0001-fix.patch"
+  [[ "${before}" != "$(uboot_inputs_digest)" ]]
+  BOARD_UNLOCK_CORES=1
+  stage_uboot
+  [[ "$(cat "${UBOOT_SRC}/README")" == required-fix-and-unlock ]]
+  BOARD_UNLOCK_CORES=0
+  stage_uboot
+  [[ "$(cat "${UBOOT_SRC}/README")" == required-fix ]]
+  printf 'invalid patch\n' > "${pdir}/always/0001-fix.patch"
+  if stage_uboot; then return 1; fi
   [[ ! -e "${UBOOT_OUT_DIR}/inputs.sha256" ]]
 }
 
@@ -227,6 +267,41 @@ uboot_unstamped() {
   make() { return 1; }
   if ( stage_uboot ); then return 1; fi
 }
+# Allwinner (sun55i) family: BL31 comes from a TF-A build, artifact name and make
+# variables differ from rkbin, and the digest must follow the TF-A source commit.
+uboot_tfa_build() {
+  BOARD_FAMILY=sunxi; FAMILY_CONF="${ROOT}/families/sunxi.conf"; source "${FAMILY_CONF}"
+  family_soc_config sun55i; TFA_REF=fixture
+  TFA_SRC="${WORK_DIR}/src/arm-trusted-firmware"
+  git init -q "${TFA_SRC}"
+  git -C "${TFA_SRC}" config user.name fixture
+  git -C "${TFA_SRC}" config user.email fixture@example.invalid
+  echo initial > "${TFA_SRC}/README"; git -C "${TFA_SRC}" add README; git -C "${TFA_SRC}" commit -qm initial
+  rm -rf "${RKBIN_SRC}"   # must not be consulted on this family
+  MAKE_LOG="${TMP}/make.log"
+  make() {
+    printf '%s\n' "$*" >> "${MAKE_LOG}"
+    case " $* " in
+      *" bl31 "*)
+        [[ " $* " == *" PLAT=sun55i_a523 "* ]] || return 1
+        mkdir -p "${TFA_SRC}/build/sun55i_a523/debug"; echo bl31 > "${TFA_SRC}/build/sun55i_a523/debug/bl31.bin" ;;
+      *" BL31="*)
+        [[ " $* " == *" BL31=${TFA_SRC}/build/sun55i_a523/debug/bl31.bin "* && " $* " == *" SCP=/dev/null "* ]] || return 1
+        [[ " $* " != *" ROCKCHIP_TPL="* ]] || return 1
+        echo uboot > "${UBOOT_SRC}/u-boot-sunxi-with-spl.bin" ;;
+    esac
+  }
+  install() { cp "${UBOOT_SRC}/u-boot-sunxi-with-spl.bin" "${UBOOT_OUT_DIR}/u-boot-sunxi-with-spl.bin"; }
+  stage_uboot
+  [[ -f "${UBOOT_OUT_DIR}/u-boot-sunxi-with-spl.bin" && -f "${UBOOT_OUT_DIR}/inputs.sha256" ]]
+  grep -q ' bl31$' "${MAKE_LOG}"
+  # cached: no rebuild while inputs unchanged; a new TF-A commit invalidates the stamp
+  make() { return 1; }
+  stage_uboot
+  echo second >> "${TFA_SRC}/README"; git -C "${TFA_SRC}" commit -qam second
+  if ( stage_uboot ); then return 1; fi
+  [[ ! -e "${UBOOT_OUT_DIR}/inputs.sha256" ]]
+}
 
 overlay_deleted_files() {
   echo upstream > "${VYOS_BUILD_TREE}/tracked"
@@ -265,7 +340,7 @@ PYTEST
 
 if (($#)); then fixture; "$1"; exit; fi
 failed=0
-for test in source_sha source_changed_ref source_same_head source_offline_mismatch source_outside_work source_work_root_alias source_symlink_escape cache_fail_closed uboot_cache_reuse kernel_recipe kernel_certificate kernel_builder kernel_mode kernel_stale_deb kernel_new_deb kernel_corrupt_new_deb kernel_container_new_deb kernel_container_corrupt_deb kernel_package_validation overlay_owner_flags overlay_deleted_files host_image_inputs iso_inputs uboot_inputs uboot_unstamped; do
+for test in source_sha source_changed_ref source_same_head source_offline_mismatch source_outside_work source_work_root_alias source_symlink_escape cache_fail_closed uboot_cache_reuse uboot_required_patches kernel_recipe kernel_certificate kernel_builder kernel_mode kernel_stale_deb kernel_new_deb kernel_corrupt_new_deb kernel_container_new_deb kernel_container_corrupt_deb kernel_package_validation overlay_owner_flags overlay_deleted_files host_image_inputs iso_inputs uboot_inputs uboot_unstamped uboot_tfa_build; do
   if "${BASH}" "$0" "${test}" > /dev/null 2>&1; then printf 'PASS %s\n' "${test}"; else printf 'FAIL %s\n' "${test}"; failed=$((failed+1)); fi
 done
 ((failed == 0))

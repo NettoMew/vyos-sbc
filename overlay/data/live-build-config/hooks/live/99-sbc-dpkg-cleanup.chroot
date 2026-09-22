@@ -1,0 +1,8 @@
+#!/bin/sh
+# 99-sbc-dpkg-cleanup.chroot — 撤掉构建期的 dpkg force-unsafe-io。
+# includes.chroot_before_packages/etc/dpkg/dpkg.cfg.d/zz-sbc-build-unsafe-io 在装包前落进
+# chroot，让 dpkg 解包时不逐文件 fsync（qemu 仿真下 fsync 是装包耗时大头，原生 arm64 也有收益）。
+# 成品系统里不该带这个设置（掉电时 dpkg 事务安全性下降），装完包在最后一个 hook 里删掉。
+set -e
+rm -f /etc/dpkg/dpkg.cfg.d/zz-sbc-build-unsafe-io
+echo "I: dpkg force-unsafe-io (build-time only) removed"

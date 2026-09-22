@@ -6,8 +6,8 @@ stage_deps() {
   section "检查宿主机依赖"
   local -a missing=()
   local c
-  for c in git curl docker python3 rsync zstd parted losetup truncate \
-           aarch64-linux-gnu-gcc swig bison flex bc make mkfs.ext4 \
+  for c in git curl docker python3 rsync xz zstd parted losetup truncate \
+           aarch64-linux-gnu-gcc aarch64-linux-gnu-strip file swig bison flex bc make mkfs.ext4 \
            unsquashfs mksquashfs depmod xorriso; do
     command -v "${c}" >/dev/null 2>&1 || missing+=("${c}")
   done
@@ -17,7 +17,7 @@ stage_deps() {
   python3 -c 'import elftools' 2>/dev/null || missing+=("python-pyelftools")
 
   ((${#missing[@]} == 0)) || fatal "缺少依赖：${missing[*]}
-  CachyOS/Arch 参考：sudo pacman -S --needed git curl docker python rsync zstd parted \\
+  CachyOS/Arch 参考：sudo pacman -S --needed git curl docker python rsync xz zstd parted \\
     aarch64-linux-gnu-gcc swig bison flex bc dosfstools e2fsprogs squashfs-tools libisoburn python-pyelftools qemu-user-static-binfmt"
 
   # arm64 容器与 squashfs chroot 都依赖 qemu binfmt，且必须带 F（fix-binary）标志，

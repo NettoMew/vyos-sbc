@@ -1,0 +1,22 @@
+#!/bin/sh
+# Keep boot medium selection paired with the GRUB root, not Linux scan order.
+set -eu
+python3 - <<'PY'
+from pathlib import Path
+p = Path('/usr/share/vyos/templates/grub/grub_vyos_version.j2')
+s = p.read_text()
+marker = '    # SBC boot-medium UUID binding (opt-in).\n'
+anchor = '    linux "/boot/{{ version_name }}/vmlinuz" ${boot_opts}'
+block = '''    # SBC boot-medium UUID binding (opt-in).
+    if [ "${sbc_pin_boot_media}" = "yes" ]; then
+        set sbc_media_uuid=""
+        insmod probe
+        probe --set=sbc_media_uuid --fs-uuid (${root})
+        set boot_opts="${boot_opts} sbc-media-uuid=${sbc_media_uuid}"
+    fi
+'''
+if marker not in s:
+    if s.count(anchor) != 1:
+        raise SystemExit('GRUB linux anchor changed; refusing partial media binding')
+    p.write_text(s.replace(anchor, block + anchor))
+PY

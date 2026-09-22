@@ -84,8 +84,8 @@ done
 section "构建计划"
 log "板:          ${BOARD:-<无（板无关阶段）>}"
 [[ -n "${BOARD}" ]] && {
-  log "SoC:         ${BOARD_SOC}（rkbin: ${RKBIN_TPL:-${RKBIN_TPL_GLOB}} + ${RKBIN_BL31:-${RKBIN_BL31_GLOB}}）"
-  log "U-Boot:      ${BOARD_UBOOT_DEFCONFIG} @ ${UBOOT_REF}"
+  log "SoC:         ${BOARD_SOC}（家族 $(family_describe)）"
+  log "U-Boot:      ${BOARD_UBOOT_DEFCONFIG} @ ${UBOOT_REF} → ${UBOOT_ARTIFACT} @ ${UBOOT_IMAGE_OFFSET_KIB}KiB"
   log "串口:        ${BOARD_SERIAL_CONSOLE},${BOARD_SERIAL_BAUD}n8"
 }
 log "vyos-build:  ${VYOS_BUILD_REPO} ${VYOS_BUILD_REF:+(${VYOS_BUILD_REF})}"
@@ -111,7 +111,7 @@ if [[ "${DRY_RUN}" == "1" ]]; then
     log "iso:    待构建"
   fi
   if [[ -n "${BOARD}" ]]; then
-    [[ -f "${UBOOT_OUT_DIR}/u-boot-rockchip.bin" ]] \
+    [[ -f "${UBOOT_OUT_DIR}/${UBOOT_ARTIFACT}" ]] \
       && log "uboot:  已缓存 → 跳过" || log "uboot:  待构建"
     stage_image
     stage_imgiso

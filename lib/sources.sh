@@ -65,9 +65,11 @@ stage_sources() {
 
   git_clone_shallow "${VYOS_BUILD_REPO}" "${VYOS_BUILD_REF}" "${VYOS_BUILD_TREE}"
 
-  # U-Boot / rkbin 只在本次计划里包含 uboot 阶段时才拉（ISO-only 跑法不浪费时间）
+  # U-Boot / 固件源只在本次计划里包含 uboot 阶段时才拉（ISO-only 跑法不浪费时间）。
+  # 固件源由家族文件决定（families/<BOARD_FAMILY>.conf 的 family_fetch_firmware：
+  # rockchip 拉 rkbin blob，sunxi 拉 TF-A 源码）。
   if stage_planned uboot; then
     git_clone_shallow "${UBOOT_REPO}" "${UBOOT_REF}" "${UBOOT_SRC}"
-    git_clone_shallow "${RKBIN_REPO}" "${RKBIN_REF}" "${RKBIN_SRC}"
+    family_fetch_firmware
   fi
 }

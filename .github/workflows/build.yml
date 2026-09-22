@@ -1,6 +1,6 @@
 name: build-image
 
-# 原生 arm64 runner（ubuntu-24.04-arm）构建 VyOS-Rockchip 整盘镜像。
+# 原生 arm64 runner（ubuntu-24.04-arm）构建 vyos-sbc 整盘镜像。
 # 关键：arm64 runner 上 `docker run --platform linux/arm64` 与 chroot 均为原生执行，
 # 不挂 qemu 仿真 —— 这正是相对本地 x86 的提速来源（lb build 不再被仿真拖慢）。
 #
@@ -17,20 +17,20 @@ on:
       board:
         description: "设备"
         type: choice
-        options: [r5s, m28k, e20c, e52c]
-        default: r5s
+        options: [r5s, m28k, e20c, e52c, a5e]
+        default: a5e
       kernel_mode:
-        description: "内核构建方式（cross=宿主交叉,快;container=官方容器流程,正常但慢。带 out-of-tree 驱动的 m28k/r5s/e52c 只能 cross）"
+        description: "内核构建方式（cross=宿主交叉,快;container=官方容器流程,正常但慢。带 out-of-tree 驱动的 m28k/r5s/e52c 只能 cross；e20c/a5e 两者皆可）"
         type: choice
         options: [cross, container]
         default: cross
 
 concurrency:
-  group: build-${{ github.ref }}-${{ github.event.inputs.board || 'r5s' }}
+  group: build-${{ github.ref }}-${{ github.event.inputs.board || 'a5e' }}
   cancel-in-progress: true
 
 env:
-  BOARD: ${{ github.event.inputs.board || 'r5s' }}
+  BOARD: ${{ github.event.inputs.board || 'a5e' }}
   # cross（默认）：宿主交叉编译,leaner、快,且产出宿主侧内核树供 r8125/aic8800 编 out-of-tree 模块。
   # container（正常）：官方 build.py 在 arm64 容器里跑（原生无 qemu,但更重）;无宿主侧内核树,
   #                    故只适合无 out-of-tree 驱动的板（e20c）。
@@ -53,10 +53,14 @@ jobs:
       # 阶段失败 → 早退并给清楚提示,省得白跑。
       - name: Validate kernel mode vs board
         run: |
-          if [ "$KERNEL_BUILD_MODE" = "container" ] && [ "$BOARD" != "e20c" ]; then
-            echo "::error::container（正常）模式不支持 $BOARD —— 它带 out-of-tree 驱动（m28k=aic8800 / r5s=r8125）,需要宿主侧内核树,请改用 cross。当前只有 e20c 可走 container。"
-            exit 1
-          fi
+          case "$BOARD" in
+            e20c|a5e) ;;   # 纯主线、无 out-of-tree 驱动：container 也可
+            *)
+              if [ "$KERNEL_BUILD_MODE" = "container" ]; then
+                echo "::error::container（正常）模式不支持 $BOARD —— 它带 out-of-tree 驱动（m28k=aic8800 / r5s,e52c=r8125）,需要宿主侧内核树,请改用 cross。当前只有 e20c/a5e 可走 container。"
+                exit 1
+              fi ;;
+          esac
 
       # GHA runner 根盘默认空闲偏小（~14GB），本构建峰值约需 25–40GB。
       - name: Free disk space
@@ -90,6 +94,10 @@ jobs:
       - name: Build regression tests
         run: |
           for test in tests/*.sh; do bash "$test"; done
+          python3 tests/a5e-hwid.py
+          python3 tests/a5e-pcie.py
+          sudo python3 tests/boot-media.py
+          python3 tests/net-tune.py
           for script in lib/*.sh scripts/*.sh tests/*.sh; do bash -n "$script"; done
           shellcheck -S warning -x lib/{sources,kernel,iso,uboot,builder,r8125,aic8800,deps,overlay,image,imgiso}.sh scripts/docker-build.sh tests/*.sh
 
@@ -138,7 +146,7 @@ jobs:
         if: steps.builder-cache.outputs.cache-hit != 'true'
         run: |
           mkdir -p ~/.cache/vyos-builder
-          docker save vyos-rockchip/builder:rolling | zstd -T0 -19 > ~/.cache/vyos-builder/img.tar.zst
+          docker save vyos-sbc/builder:rolling | zstd -T0 -19 > ~/.cache/vyos-builder/img.tar.zst
 
       - name: Restore cached kernel deb into packages/
         run: |
@@ -155,13 +163,25 @@ jobs:
       - name: Kernel + ISO + board assets + U-Boot + image
         run: scripts/build.sh "$BOARD" --stages kernel,iso,aic8800,r8125,oled,sources,uboot,image,imgiso
 
+      - name: Verify A5E PCIe kernel and firmware DT contract
+        if: env.BOARD == 'a5e'
+        run: |
+          tmp=$(mktemp -d)
+          trap 'rm -rf "$tmp"' EXIT
+          dpkg-deb -x work/vyos-build/packages/linux-image-*-vyos_*_arm64.deb "$tmp"
+          python3 tests/a5e-pcie.py \
+            --kernel-config "$tmp"/boot/config-*-vyos \
+            --kernel-dtb "$tmp"/usr/lib/linux-image-*-vyos/allwinner/sun55i-a527-cubie-a5e.dtb \
+            --uboot-config work/src/u-boot/.config \
+            --uboot-dtb work/src/u-boot/u-boot.dtb
+
       - name: Upload image
         if: success()
         uses: actions/upload-artifact@v4
         with:
           name: vyos-${{ env.BOARD }}-image
           path: |
-            out/*.img.zst
+            out/*.img.xz
             out/*.iso
             out/*.sha256
             out/*.json

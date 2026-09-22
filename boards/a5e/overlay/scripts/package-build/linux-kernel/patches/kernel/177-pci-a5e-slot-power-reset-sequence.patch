@@ -1,0 +1,122 @@
+From: VyOS SBC maintainers
+Subject: [PATCH] PCI: sun55i: own slot power and order PERST around power/REFCLK
+
+A5E/O2 Micro NVMe recovers with a real slot power cycle and reset held
+during power-up. Armbian initramfs readback verified the owned-power
+DT sequence. Do not keep the slot always-on across OS handoff/reset.
+Preserve the vendor binding's raw PERST# convention.
+
+diff --git a/drivers/pci/pcie-sunxi/pcie-sunxi-plat.c b/drivers/pci/pcie-sunxi/pcie-sunxi-plat.c
+--- a/drivers/pci/pcie-sunxi/pcie-sunxi-plat.c
++++ b/drivers/pci/pcie-sunxi/pcie-sunxi-plat.c
+@@ -969,9 +969,14 @@
+ 		pci->link_gen = 0x1;
+ 	}
+ 
+-	pci->rst_gpio = devm_gpiod_get(&pdev->dev, "reset", GPIOD_OUT_HIGH);
++	pci->rst_gpio = devm_gpiod_get(&pdev->dev, "reset", GPIOD_ASIS);
+ 	if (IS_ERR(pci->rst_gpio))
+ 		return dev_err_probe(&pdev->dev, PTR_ERR(pci->rst_gpio), "missing reset GPIO\n");
++
++	/* This vendor binding uses raw PERST# levels, independent of GPIO flags. */
++	ret = gpiod_direction_output_raw(pci->rst_gpio, 0);
++	if (ret)
++		return dev_err_probe(&pdev->dev, ret, "cannot assert PERST#\n");
+ 
+ 	/* WAKE# is driven by the endpoint, never by the root complex. */
+ 	pci->wake_gpio = devm_gpiod_get_optional(&pdev->dev, "wake", GPIOD_IN);
+@@ -1007,6 +1012,8 @@
+ {
+ 	int ret;
+ 
++	/* Keep the endpoint in reset while power and REFCLK become stable. */
++	gpiod_set_raw_value_cansleep(pci->rst_gpio, 0);
+ 	ret = sunxi_pcie_plat_power_on(pci);
+ 	if (ret)
+ 		return ret;
+@@ -1019,6 +1026,10 @@
+ 	if (ret)
+ 		goto err1;
+ 
++	/* REFCLK must be stable before releasing PERST#; then allow config access. */
++	usleep_range(100, 200);
++	gpiod_set_raw_value_cansleep(pci->rst_gpio, 1);
++	msleep(100);
+ 	return 0;
+ 
+ err1:
+@@ -1031,6 +1042,9 @@
+ 
+ static void sunxi_pcie_plat_hw_deinit(struct sunxi_pcie *pci)
+ {
++	/* Do not remove REFCLK from a live, powered endpoint. */
++	gpiod_set_raw_value_cansleep(pci->rst_gpio, 0);
++	sunxi_pcie_plat_ltssm_disable(pci);
+ 	sunxi_pcie_plat_combo_phy_deinit(pci);
+ 	sunxi_pcie_plat_power_off(pci);
+ 	sunxi_pcie_plat_clk_exit(pci);
+@@ -1125,8 +1139,6 @@
+ {
+ 	struct sunxi_pcie *pci = platform_get_drvdata(pdev);
+ 
+-	sunxi_pcie_plat_hw_deinit(pci);
+-
+ 	pm_runtime_disable(&pdev->dev);
+ 
+ 	pm_runtime_put(&pdev->dev);
+@@ -1145,8 +1157,14 @@
+ 		break;
+ 	}
+ 
+-	sunxi_pcie_plat_ltssm_disable(pci);
+-
++	sunxi_pcie_plat_hw_deinit(pci);
++
++}
++
++/* device_shutdown() shuts down the PCI children before their parent host. */
++static void sunxi_pcie_plat_shutdown(struct platform_device *pdev)
++{
++	sunxi_pcie_plat_hw_deinit(platform_get_drvdata(pdev));
+ }
+ 
+ #if IS_ENABLED(CONFIG_PM)
+@@ -1220,6 +1238,7 @@
+ 	},
+ 	.probe  = sunxi_pcie_plat_probe,
+ 	.remove   = sunxi_pcie_plat_remove,
++	.shutdown = sunxi_pcie_plat_shutdown,
+ };
+ 
+ module_platform_driver(sunxi_pcie_plat_driver);
+diff --git a/drivers/pci/pcie-sunxi/pcie-sunxi-rc.c b/drivers/pci/pcie-sunxi/pcie-sunxi-rc.c
+--- a/drivers/pci/pcie-sunxi/pcie-sunxi-rc.c
++++ b/drivers/pci/pcie-sunxi/pcie-sunxi-rc.c
+@@ -697,11 +697,6 @@
+ 
+ 	if (!sunxi_pcie_host_is_link_up(pp)) {
+ 		sunxi_pcie_plat_ltssm_disable(pci);
+-		if (!IS_ERR(pci->rst_gpio)) {
+-			gpiod_set_raw_value(pci->rst_gpio, 0);
+-			msleep(100);
+-			gpiod_set_raw_value(pci->rst_gpio, 1);
+-		}
+ 	} else {
+ 		msleep(100);
+ 	}
+diff --git a/arch/arm64/boot/dts/allwinner/sun55i-a527-cubie-a5e.dts b/arch/arm64/boot/dts/allwinner/sun55i-a527-cubie-a5e.dts
+--- a/arch/arm64/boot/dts/allwinner/sun55i-a527-cubie-a5e.dts
++++ b/arch/arm64/boot/dts/allwinner/sun55i-a527-cubie-a5e.dts
+@@ -71,9 +71,9 @@
+ 		regulator-name = "pcie-3v3";
+ 		regulator-min-microvolt = <3300000>;
+ 		regulator-max-microvolt = <3300000>;
+-		regulator-enable-ramp-delay = <1000>;
+-		regulator-always-on;
+-		regulator-boot-on;
++		/* The host owns slot power; PERST# must precede power-on. */
++		startup-delay-us = <100000>;
++		off-on-delay-us = <100000>;
+ 		gpio = <&r_pio 0 11 GPIO_ACTIVE_HIGH>; /* PL11 */
+ 		enable-active-high;
+ 	};

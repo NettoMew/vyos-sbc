@@ -1,0 +1,10 @@
+#!/bin/sh
+# 97-sbc-leds-enable.chroot — 启用 LED 服务（开机自配 LED）。
+# 用 hook 在 chroot 内创建 wants symlink（而非 includes.chroot 放 symlink——那会让
+# build-vyos-image 的 copytree 跟随绝对路径符号链接失败）。
+set -e
+[ -f /lib/systemd/system/sbc-leds.service ] || { echo "E: sbc-leds.service 缺失"; exit 1; }
+mkdir -p /etc/systemd/system/multi-user.target.wants
+ln -sf /lib/systemd/system/sbc-leds.service \
+    /etc/systemd/system/multi-user.target.wants/sbc-leds.service
+echo "I: sbc-leds.service enabled"

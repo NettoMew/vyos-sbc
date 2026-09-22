@@ -5,10 +5,11 @@
 # 与 `set system image default-boot` 开箱即用。
 #
 # 用法（root_dir 为未来根分区在 chroot 内的挂载点）：
-#   python3 grub-setup.py --root-dir /mnt --version 2026.06.13-0001-rockchip \
+#   python3 grub-setup.py --root-dir /mnt --version 2026.06.13-0001-sbc \
 #       --console-type ttyS --console-num 0 --console-speed 1500000
 
 import argparse
+from pathlib import Path
 
 import vyos.template
 from vyos.system import grub
@@ -22,6 +23,7 @@ def main() -> None:
     p.add_argument('--console-num', default='0')
     p.add_argument('--console-speed', default='115200')
     p.add_argument('--timeout', default='5')
+    p.add_argument('--pin-boot-media', action='store_true')
     args = p.parse_args()
 
     root = args.root_dir
@@ -47,6 +49,12 @@ def main() -> None:
     grub.version_add(args.version, root)
     grub.set_default(args.version, root)
     grub.set_console_type(args.console_type, root)
+
+    if args.pin_boot_media:
+        # The menu template resolves the UUID at boot, so a correctly
+        # re-UUIDed NVMe installation does not retain the SD UUID.
+        Path(root, grub.GRUB_DIR_VYOS.lstrip('/'), '39-sbc-media-autoload.cfg').write_text(
+            'set sbc_pin_boot_media=yes\nexport sbc_pin_boot_media\n')
 
     # 让 GRUB 按字母序读取配置片段（与官方 raw 镜像一致）
     grub.sort_inodes(f'{root}/{grub.GRUB_DIR_VYOS}')

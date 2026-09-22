@@ -1,0 +1,44 @@
+From: VyOS SBC maintainers
+Subject: [PATCH] PCI: sun55i: do not treat stale application status as link up
+
+A5E live handoff: LTSSM_CTRL=0 while APP_LINK=0x17 still claims link up.
+Linux then skipped enabling LTSSM and enumerated only the root port.
+Setting LTSSM bit0 changed LNKSTA from 0x1011 to 0xb012 and restored
+the endpoint immediately. Require the actual data-link-active state.
+
+diff --git a/drivers/pci/pcie-sun55i.c b/drivers/pci/pcie-sun55i.c
+--- a/drivers/pci/pcie-sun55i.c
++++ b/drivers/pci/pcie-sun55i.c
+@@ -259,24 +259,14 @@
+ 
+ static int sun55i_pcie_host_link_up_status(struct sun55i_pcie_port *pp)
+ {
+-	u32 val;
+-	int ret;
+-	struct sun55i_pcie *pcie = to_sun55i_pcie_from_pp(pp);
+-
+-	val = sun55i_pcie_readl(pcie, PCIE_LINK_STAT);
+-
+-	if ((val & RDLH_LINK_UP) && (val & SMLH_LINK_UP))
+-		ret = 1;
+-	else
+-		ret = 0;
+-
+-    debug("  Link Status: 0x%08x\n", val);
+-    debug("  RDLH_LINK_UP: %d\n", !!(val & RDLH_LINK_UP));
+-    debug("  SMLH_LINK_UP: %d\n", !!(val & SMLH_LINK_UP));
+-    debug("  LINK_SPEED: %d\n", (val >> 16) & 0xF);
+-    printf("  LINK_WIDTH: %d\n", (val >> 20) & 0x3F);
+-
+-	return ret;
++	struct sun55i_pcie *pci = to_sun55i_pcie_from_pp(pp);
++	u8 cap;
++
++	if (!(sun55i_pcie_readl(pci, PCIE_LTSSM_CTRL) & PCIE_LINK_TRAINING))
++		return 0;
++	cap = sun55i_pcie_plat_find_capability(pci, PCI_CAP_ID_EXP);
++	return cap && (sun55i_pcie_readw_dbi(pci, cap + PCI_EXP_LNKSTA) &
++		       PCI_EXP_LNKSTA_DLLLA);
+ }
+ 
+ static int sun55i_pcie_host_link_up(struct sun55i_pcie_port *pp)

@@ -1,0 +1,36 @@
+Subject: [PATCH] usb: generic: stop EHCI/OHCI at OS handoff
+
+The generic host drivers allocate DMA memory but do not request removal
+at OS handoff. EFI ExitBootServices() calls dm_remove_devices_active(),
+which skips them without an active-DMA or OS-prepare flag.
+
+On a Cubie A5E, OHCI HCCA was 0x7bf1f000 before EFI boot. Linux reused
+that page for initramfs udevadm: its file offset 0x12080 mapped to physical
+0x7bf1f080, exactly the old HCCA frame_no/pad1 writeback address. Three
+bytes in an ELF relocation were overwritten by a frame counter. The
+retained compressed initrd still matched its SHA256. Explicit usb stop
+before the same EFI/GRUB boot prevented the corruption and allowed login.
+
+Request normal driver removal at handoff, as explicit usb stop does,
+rather than reserving leaked buffers or changing kernel/initrd data.
+Cover the generic EHCI companion too so neither host retains active DMA.
+This board-scoped patch is applied only when building A5E firmware.
+
+diff --git a/drivers/usb/host/ehci-generic.c b/drivers/usb/host/ehci-generic.c
+--- a/drivers/usb/host/ehci-generic.c
++++ b/drivers/usb/host/ehci-generic.c
+@@ -168,4 +168,4 @@
+ 	.ops	= &ehci_usb_ops,
+ 	.priv_auto	= sizeof(struct generic_ehci),
+-	.flags	= DM_FLAG_ALLOC_PRIV_DMA,
++	.flags	= DM_FLAG_ALLOC_PRIV_DMA | DM_FLAG_OS_PREPARE,
+ };
+diff --git a/drivers/usb/host/ohci-generic.c b/drivers/usb/host/ohci-generic.c
+--- a/drivers/usb/host/ohci-generic.c
++++ b/drivers/usb/host/ohci-generic.c
+@@ -111,4 +111,4 @@
+ 	.ops	= &ohci_usb_ops,
+ 	.priv_auto	= sizeof(struct generic_ohci),
+-	.flags	= DM_FLAG_ALLOC_PRIV_DMA,
++	.flags	= DM_FLAG_ALLOC_PRIV_DMA | DM_FLAG_OS_PREPARE,
+ };

@@ -1,0 +1,45 @@
+Subject: [PATCH] pci: sunxi: defer unavailable suppliers and treat WAKE as input
+
+Do not continue with an unpowered slot when regulator/GPIO probing defers.
+The slot WAKE# line is an endpoint output; driving it high from the RC can
+contend with the endpoint. Preserve the vendor driver's raw PERST levels.
+
+diff --git a/drivers/pci/pcie-sunxi/pcie-sunxi-plat.c b/drivers/pci/pcie-sunxi/pcie-sunxi-plat.c
+--- a/drivers/pci/pcie-sunxi/pcie-sunxi-plat.c
++++ b/drivers/pci/pcie-sunxi/pcie-sunxi-plat.c
+@@ -971,19 +971,16 @@
+ 
+ 	pci->rst_gpio = devm_gpiod_get(&pdev->dev, "reset", GPIOD_OUT_HIGH);
+ 	if (IS_ERR(pci->rst_gpio))
+-		dev_warn(&pdev->dev, "Failed to get \"reset-gpios\"\n");
+-	else
+-		gpiod_direction_output(pci->rst_gpio, 1);
+-
+-	pci->wake_gpio = devm_gpiod_get(&pdev->dev, "wake", GPIOD_OUT_HIGH);
++		return dev_err_probe(&pdev->dev, PTR_ERR(pci->rst_gpio), "missing reset GPIO\n");
++
++	/* WAKE# is driven by the endpoint, never by the root complex. */
++	pci->wake_gpio = devm_gpiod_get_optional(&pdev->dev, "wake", GPIOD_IN);
+ 	if (IS_ERR(pci->wake_gpio))
+-		dev_warn(&pdev->dev, "Failed to get \"wake-gpios\"\n");
+-	else
+-		gpiod_direction_output(pci->wake_gpio, 1);
++		return dev_err_probe(&pdev->dev, PTR_ERR(pci->wake_gpio), "invalid wake GPIO\n");
+ 
+ 	pci->pcie3v3 = devm_regulator_get_optional(&pdev->dev, "pcie3v3");
+-	if (IS_ERR(pci->pcie3v3))
+-		dev_warn(&pdev->dev, "no pcie3v3 regulator found\n");
++	if (IS_ERR(pci->pcie3v3) && PTR_ERR(pci->pcie3v3) != -ENODEV)
++		return dev_err_probe(&pdev->dev, PTR_ERR(pci->pcie3v3), "slot power unavailable\n");
+ 
+ 	ret = of_property_read_u32(np, "num-lanes", &pci->lanes);
+ 	if (ret) {
+@@ -996,7 +993,7 @@
+ 	ret = sunxi_pcie_plat_clk_get(pdev, pci);
+ 	if (ret) {
+ 		dev_err(&pdev->dev, "pcie get clk init failed\n");
+-		return -ENODEV;
++		return ret;
+ 	}
+ 
+ 	pci->phy = devm_phy_get(pci->dev, "pcie-phy");

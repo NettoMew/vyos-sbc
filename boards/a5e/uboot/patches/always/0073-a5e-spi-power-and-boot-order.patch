@@ -1,0 +1,76 @@
+From: VyOS SBC maintainers
+Subject: [PATCH] A5E: keep SPI boot rail powered across warm resets
+
+Real board: CLDO1 voltage 0x9b=0x0d (1.8V), disabled by Linux,
+0x91=0xdc. Enabling only bit0 makes sf probe identify w25q128fw and
+sf read succeed; neither changing SPI FSR mapping nor speed fixed it.
+Initialize the rail in SPL and retain it in the firmware-passed DT.
+Try NVMe before network timeouts while keeping SD rescue first.
+
+diff --git a/board/sunxi/board.c b/board/sunxi/board.c
+--- a/board/sunxi/board.c
++++ b/board/sunxi/board.c
+@@ -630,6 +630,23 @@
+ 	    IS_ENABLED(CONFIG_MACH_SUN55I_A523) && !power_failed) {
+ 		u8 reg_val;
+ 
++		/* A5E SPI NOR and bank PC need CLDO1 at 1.8V. Linux may
++		 * have disabled this unused rail before a warm SD reboot.
++		 * Live A/B: 0x91=dc -> JEDEC 000000, dc|BIT(0) -> w25q128fw.
++		 */
++		if (IS_ENABLED(CONFIG_SPL_SPI_SUNXI)) {
++			power_failed |= pmic_bus_read(0x9b, &reg_val);
++			if (!power_failed)
++				power_failed |= pmic_bus_write(0x9b,
++						(reg_val & ~0x1f) | 0x0d);
++			if (!power_failed)
++				power_failed |= pmic_bus_read(0x91, &reg_val);
++			if (!power_failed && !(reg_val & BIT(0))) {
++				power_failed |= pmic_bus_write(0x91, reg_val | BIT(0));
++				mdelay(5);
++			}
++		}
++
+ 		/* Set CLDO3 voltage to 3300mV: (3300-500)/100 = 0x1c */
+ 		power_failed |= pmic_bus_read(0x9d, &reg_val);
+ 		if (!power_failed) {
+diff --git a/dts/upstream/src/arm64/allwinner/sun55i-a527-cubie-a5e.dts b/dts/upstream/src/arm64/allwinner/sun55i-a527-cubie-a5e.dts
+--- a/dts/upstream/src/arm64/allwinner/sun55i-a527-cubie-a5e.dts
++++ b/dts/upstream/src/arm64/allwinner/sun55i-a527-cubie-a5e.dts
+@@ -458,3 +458,9 @@
+ 	lane-select-supply = <&gma340_pcie>;
+ 	lane-enable-supply = <&gma340_oe>;
+ };
++
++/* BROM must be able to read SPI again after a Linux warm reboot. */
++&reg_cldo1 {
++	regulator-always-on;
++	regulator-boot-on;
++};
+diff --git a/configs/radxa-cubie-a5e_defconfig b/configs/radxa-cubie-a5e_defconfig
+--- a/configs/radxa-cubie-a5e_defconfig
++++ b/configs/radxa-cubie-a5e_defconfig
+@@ -50,3 +50,6 @@
+ CONFIG_SPI_FLASH_WINBOND=y
+ CONFIG_CMD_SF=y
+ CONFIG_SPL_SPI_SUNXI=y
++CONFIG_CMD_CACHE=y
++CONFIG_CMD_REGULATOR=y
++CONFIG_CMD_PMIC=y
+diff --git a/include/configs/sunxi-common.h b/include/configs/sunxi-common.h
+--- a/include/configs/sunxi-common.h
++++ b/include/configs/sunxi-common.h
+@@ -227,11 +227,11 @@
+ #define BOOT_TARGET_DEVICES(func) \
+ 	func(FEL, fel, na) \
+ 	BOOT_TARGET_DEVICES_MMC(func) \
++	BOOT_TARGET_DEVICES_NVME(func) \
+ 	BOOT_TARGET_DEVICES_SCSI(func) \
+ 	BOOT_TARGET_DEVICES_USB(func) \
+ 	BOOT_TARGET_DEVICES_PXE(func) \
+-	BOOT_TARGET_DEVICES_DHCP(func) \
+-	BOOT_TARGET_DEVICES_NVME(func)
++	BOOT_TARGET_DEVICES_DHCP(func)
+ 
+ #ifdef CONFIG_OLD_SUNXI_KERNEL_COMPAT
+ #define BOOTCMD_SUNXI_COMPAT \

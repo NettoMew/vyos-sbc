@@ -11,14 +11,16 @@ MNT_DIR="${WORK_DIR}/mnt"
 VYOS_BUILD_TREE="${WORK_DIR}/vyos-build"
 UBOOT_SRC="${WORK_DIR}/src/u-boot"
 RKBIN_SRC="${WORK_DIR}/src/rkbin"
+TFA_SRC="${WORK_DIR}/src/arm-trusted-firmware"   # Allwinner 板的 BL31 源（families/sunxi.conf）
 ISO_KEEP_DIR="${WORK_DIR}/iso"
 
 OVERLAY_DIR="${PROJECT_ROOT}/overlay"
 BOARDS_DIR="${PROJECT_ROOT}/boards"
+FAMILIES_DIR="${PROJECT_ROOT}/families"
 RESOURCES_DIR="${PROJECT_ROOT}/resources"
 
-# 构建 flavor 名 = overlay/data/build-flavors/rockchip.toml
-FLAVOR="${FLAVOR:-rockchip}"
+# 构建 flavor 名 = overlay/data/build-flavors/sbc.toml
+FLAVOR="${FLAVOR:-sbc}"
 
 # --- vyos-build 克隆来源自动探测 -------------------------------------------------
 if [[ -z "${VYOS_BUILD_REPO}" ]]; then
@@ -55,27 +57,16 @@ if [[ -n "${BOARD:-}" ]]; then
   # 成可被 VyOS `add system image` 原地升级的每板 ISO。
   BOARD_ISO_DIR="${WORK_DIR}/board-iso/${BOARD}"
 
-  # SoC → rkbin blob 选择模式。rkbin master 滚版本时会直接替换旧文件，钉死
-  # 文件名必碎；按 glob 取版本号最新的一个（uboot.sh 解析），RKBIN_BL31/RKBIN_TPL
-  # 可显式覆盖成 rkbin 内的相对路径。
-  case "${BOARD_SOC}" in
-    rk3528)
-      RKBIN_BL31_GLOB="${RKBIN_BL31_GLOB:-bin/rk35/rk3528_bl31_v*.elf}"
-      RKBIN_TPL_GLOB="${RKBIN_TPL_GLOB:-bin/rk35/rk3528_ddr_1056MHz_v*.bin}"
-      ;;
-    rk3568)
-      RKBIN_BL31_GLOB="${RKBIN_BL31_GLOB:-bin/rk35/rk3568_bl31_v*.elf}"
-      RKBIN_TPL_GLOB="${RKBIN_TPL_GLOB:-bin/rk35/rk3568_ddr_1056MHz_v*.bin}"
-      ;;
-    rk3588)
-      # RK3582（E52C）= RK3588S 残核 bin，boot 等同 rk3588s，用 rk3588 blob。
-      # DDR 选 lp4_2112MHz/lp5_2400MHz（rkbin 同一 blob 覆盖 LPDDR4/4X/5、按板载颗粒
-      # 自适应）；BL31 取版本最新（v1.54）。RKBIN_TPL 可在 board.conf 显式覆盖到其他频点。
-      RKBIN_BL31_GLOB="${RKBIN_BL31_GLOB:-bin/rk35/rk3588_bl31_v*.elf}"
-      RKBIN_TPL_GLOB="${RKBIN_TPL_GLOB:-bin/rk35/rk3588_ddr_lp4_2112MHz_lp5_2400MHz_v*.bin}"
-      ;;
-    *) fatal "未知 BOARD_SOC=${BOARD_SOC}（lib/env.sh 的 case 里加一条即可）" ;;
-  esac
+  # SoC 家族 = families/<BOARD_FAMILY>.conf（声明式，与 boards/ 同构）：它给出启动固件的
+  # 来源与产物（UBOOT_ARTIFACT / UBOOT_IMAGE_OFFSET_KIB / KERNEL_DTB_FAMILY_GLOB）并实现
+  # family_* 钩子（取源、缓存输入、选 blob 或现编 BL31、按 SoC 派生）。引擎对家族零 if：
+  # 加一个 SoC 家族 = 加一个文件，加一块板 = 写 board.conf 指向家族。契约见 families/rockchip.conf。
+  : "${BOARD_FAMILY:?board.conf 必须设置 BOARD_FAMILY（families/ 下的家族名，如 rockchip、sunxi）}"
+  FAMILY_CONF="${FAMILIES_DIR}/${BOARD_FAMILY}.conf"
+  [[ -f "${FAMILY_CONF}" ]] || fatal "未知家族 BOARD_FAMILY=${BOARD_FAMILY}（缺 ${FAMILY_CONF}）"
+  # shellcheck source=/dev/null
+  source "${FAMILY_CONF}"
+  family_soc_config "${BOARD_SOC}"
 fi
 
 # --- 运行时解析（fetch 后才有值）--------------------------------------------------
@@ -93,9 +84,11 @@ kernel_deb_glob() {
 iso_state_file() { echo "${STATE_DIR}/iso-path"; }
 
 current_iso() {
-  # 最近一次成功构建并归档的 ISO；不存在返回空
+  # 最近一次成功构建并归档的 ISO；不存在（含 state 记录的路径已失效，如 work/ 被搬过）返回空。
+  # 必须以 0 退出：调用方 `iso="$(current_iso)"` 在 set -e 下，非零会让整个构建静默退出。
   local f; f="$(iso_state_file)"
   [[ -f "${f}" ]] || return 0
   local p; p="$(cat "${f}")"
   [[ -f "${p}" ]] && echo "${p}"
+  return 0
 }

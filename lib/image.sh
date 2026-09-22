@@ -2,7 +2,9 @@
 # lib/image.sh — 按板组装可烧录镜像（宿主机；需要 root 的命令逐条 sudo）。
 #
 # 布局（GPT）：
-#   sector 64                          u-boot-rockchip.bin（TPL + BL31 + U-Boot）
+#   UBOOT_IMAGE_OFFSET_KIB             启动固件（env.sh 按 SoC 家族派生）：
+#     rockchip 32KiB(sector 64)          u-boot-rockchip.bin（TPL + BL31 + U-Boot）
+#     sunxi    128KiB(sector 256)        u-boot-sunxi-with-spl.bin（SPL + BL31 + U-Boot；8KiB 会压坏 GPT）
 #   p1  ESP_START_MIB → +ESP_SIZE_MIB  ESP（FAT32，grub-efi arm64，BOOTAA64.EFI）
 #   p2  其余 → 100%                    ext4，label=persistence（VyOS live 持久层）
 #       /boot/<version>/{vmlinuz,initrd.img,<version>.squashfs,dtbs/}
@@ -17,6 +19,25 @@
 # 完成（resources/grub-setup.py 调 vyos.system.grub，与官方 raw_image.py 同源）。
 
 umount_if() { mountpoint -q "$1" 2>/dev/null && sudo umount "$1" || true; }
+
+# 压缩流验证成功后才替换成品；失败保留 raw，避免留下貌似完整的 .xz。
+archive_disk_image() {
+  local img="$1" out tmp
+  out="${OUT_DIR}/$(basename "$1").xz" || return
+  tmp="$(mktemp "${out}.tmp.XXXXXX")" || return
+  if ! xz -T"${JOBS}" "-${XZ_LEVEL}" --check=crc64 --stdout -- "${img}" > "${tmp}"; then
+    rm -f "${tmp}"
+    return 1
+  fi
+  if ! xz --test -- "${tmp}"; then
+    rm -f "${tmp}"
+    return 1
+  fi
+  chmod 644 "${tmp}" || { rm -f "${tmp}"; return 1; }
+  mv -f -- "${tmp}" "${out}" || { rm -f "${tmp}"; return 1; }
+  (cd "${OUT_DIR}" && sha256sum "${out##*/}" > "${out##*/}.sha256") || return
+  [[ "${KEEP_RAW_IMAGE}" == "1" ]] || rm -f -- "${img}" || return
+}
 
 cleanup_image() {
   local r="${ROOTFS_DIR}"
@@ -35,18 +56,19 @@ cleanup_image() {
 stage_image() {
   section "组装镜像（${BOARD}）"
 
-  local iso uboot_bin
+  local iso uboot_bin uboot_seek
   iso="$(current_iso)"
-  uboot_bin="${UBOOT_OUT_DIR}/u-boot-rockchip.bin"
+  uboot_bin="${UBOOT_OUT_DIR}/${UBOOT_ARTIFACT}"
+  uboot_seek=$(( UBOOT_IMAGE_OFFSET_KIB * 2 ))   # 512B 扇区
   ROOTFS_DIR="${WORK_DIR}/img/rootfs"
 
   if [[ "${DRY_RUN:-0}" == "1" ]]; then
-    log "dry-run：GPT + u-boot@s64 + ESP(${ESP_START_MIB}MiB,+${ESP_SIZE_MIB}MiB) + persistence(ext4)"
+    log "dry-run：GPT + ${UBOOT_ARTIFACT}@${UBOOT_IMAGE_OFFSET_KIB}KiB(s${uboot_seek}) + ESP(${ESP_START_MIB}MiB,+${ESP_SIZE_MIB}MiB) + persistence(ext4)"
     log "dry-run：base ISO=${iso:-<待构建>}  U-Boot=${uboot_bin}"
     log "dry-run：unsquashfs base → 注入 board-assets/${BOARD} → depmod → mksquashfs(xz,262144)"
     [[ -d "${BOARD_ASSETS_DIR}" ]] && log "dry-run：板级资产存在：${BOARD_ASSETS_DIR}" \
       || log "dry-run：本板无 board-assets（纯主线板，如 e20c）→ 直接重打包 base"
-    log "dry-run：产物 out/vyos-<version>-${BOARD_IMAGE_PREFIX}.img.zst  console=${BOARD_SERIAL_CONSOLE},${BOARD_SERIAL_BAUD}n8"
+    log "dry-run：产物 out/vyos-<version>-${BOARD_IMAGE_PREFIX}.img.xz  console=${BOARD_SERIAL_CONSOLE},${BOARD_SERIAL_BAUD}n8"
     return 0
   fi
 
@@ -71,7 +93,7 @@ stage_image() {
     mkpart EFI fat32 "${ESP_START_MIB}MiB" "$((ESP_START_MIB + ESP_SIZE_MIB))MiB" \
     set 1 esp on \
     mkpart persistence ext4 "$((ESP_START_MIB + ESP_SIZE_MIB))MiB" 100%
-  run dd if="${uboot_bin}" of="${img}" bs=512 seek=64 conv=notrunc,fsync status=none
+  run dd if="${uboot_bin}" of="${img}" bs=512 seek="${uboot_seek}" conv=notrunc,fsync status=none
 
   log "挂载 loop 设备"
   IMG_LOOP="$(sudo losetup --show -fP "${img}")"
@@ -129,6 +151,12 @@ stage_image() {
       log "console device: ttyS0 → ${BOARD_SERIAL_CONSOLE}（config.boot.default）"
       run sudo sed -i "s/device ttyS0 {/device ${BOARD_SERIAL_CONSOLE} {/" "${cfgdef}"
     fi
+    #    波特率同理：共享 default_config 写死 1500000（Rockchip 全链）。Allwinner 板
+    #    （Cubie A5E）BROM/SPL/U-Boot/内核全链 115200，按本板修正（115200 在 vyos-1x 白名单内）。
+    if [[ "${BOARD_SERIAL_BAUD}" != "1500000" ]]; then
+      log "console speed: 1500000 → ${BOARD_SERIAL_BAUD}（config.boot.default）"
+      run sudo sed -i "s/speed \"1500000\"/speed \"${BOARD_SERIAL_BAUD}\"/" "${cfgdef}"
+    fi
     # ② 三网口板（R5S，BOARD_THIRD_PORT=1）：共享 default_config 只配 eth0/eth1，给第三口
     #    eth2 也补一段 DHCP，三口开箱即连（桥接/LAN 划分留给用户后配）。门控用 BOARD_THIRD_PORT
     #    而非 BOARD_R8125——后者只表示“装 r8125 驱动”：E52C 同样 BOARD_R8125=1 但只有两口
@@ -150,13 +178,29 @@ stage_image() {
   # 镜像定长(~4G),烧到更大卡/eMMC 后尾部空着。这是 base 服务(overlay includes.chroot,
   # 随 base ISO 重建也会带),此处在 image 阶段一并注入,免 base ISO 重建即生效。三板通用。
   local gfs="${OVERLAY_DIR}/data/live-build-config/includes.chroot"
-  if [[ -f "${gfs}/usr/local/sbin/rockchip-growfs.sh" ]]; then
-    log "注入首启自动扩容服务 rockchip-growfs"
-    run sudo install -Dm755 "${gfs}/usr/local/sbin/rockchip-growfs.sh" "${ROOTFS_DIR}/usr/local/sbin/rockchip-growfs.sh"
-    run sudo install -Dm644 "${gfs}/lib/systemd/system/rockchip-growfs.service" "${ROOTFS_DIR}/lib/systemd/system/rockchip-growfs.service"
+  if [[ -f "${gfs}/usr/local/sbin/sbc-growfs.sh" ]]; then
+    log "注入首启自动扩容服务 sbc-growfs"
+    run sudo install -Dm755 "${gfs}/usr/local/sbin/sbc-growfs.sh" "${ROOTFS_DIR}/usr/local/sbin/sbc-growfs.sh"
+    run sudo install -Dm644 "${gfs}/lib/systemd/system/sbc-growfs.service" "${ROOTFS_DIR}/lib/systemd/system/sbc-growfs.service"
     run sudo mkdir -p "${ROOTFS_DIR}/etc/systemd/system/multi-user.target.wants"
-    run sudo ln -sf ../rockchip-growfs.service "${ROOTFS_DIR}/etc/systemd/system/multi-user.target.wants/rockchip-growfs.service"
+    run sudo ln -sf ../sbc-growfs.service "${ROOTFS_DIR}/etc/systemd/system/multi-user.target.wants/sbc-growfs.service"
   fi
+
+  # --- 宿主原生 strip（接替 vyos-build 的 92-strip-symbols hook）-----------------
+  # 上游 hook 在 chroot 里逐文件 file+strip，x86 宿主 qemu 仿真下 20+ 分钟；overlay 里同名 hook
+  # 已改成只做 binutils 清理，真正的 strip 在这里用宿主的 aarch64-linux-gnu-strip 原生做：
+  # 同一组目录、同样的 --strip-unneeded --remove-section=.comment/.note --preserve-dates，
+  # 结果与上游等价，耗时秒级。只处理 file 报 "not stripped" 的普通文件（符号链接/脚本自然跳过）。
+  local sdir stripped=0 f
+  for sdir in etc/hsflowd/modules usr/bin usr/lib/openvpn usr/lib/aarch64-linux-gnu usr/lib32 usr/lib64 usr/libx32 usr/sbin; do
+    [[ -d "${ROOTFS_DIR}/${sdir}" ]] || continue
+    while IFS= read -r f; do
+      [[ -n "${f}" ]] || continue
+      sudo aarch64-linux-gnu-strip --strip-unneeded --remove-section=.comment --remove-section=.note \
+        --preserve-dates "${f}" 2>/dev/null && stripped=$((stripped + 1)) || true
+    done < <(sudo find "${ROOTFS_DIR}/${sdir}" -type f -print0 | xargs -0 -r file -N -- | grep -a 'not stripped' | cut -d: -f1)
+  done
+  log "strip（宿主原生 aarch64-linux-gnu-strip）：${stripped} 个文件"
 
   log "mksquashfs → ${vdir}/${version}.squashfs（comp xz, block 262144）"
   run sudo mksquashfs "${ROOTFS_DIR}" "${vdir}/${version}.squashfs" \
@@ -177,14 +221,16 @@ stage_image() {
   done
 
   # 内核 DTB 一并放入版本目录（U-Boot EFI 默认传自己的控制 DT；这份留作调试/手动 fdt
-  # 覆盖的后手，升级时随版本目录走）
-  local dtb
-  for dtb in "${ROOTFS_DIR}/usr/lib/linux-image-"*/rockchip/rk35*.dtb; do
-    [[ -f "${dtb}" ]] && run sudo install -Dm644 "${dtb}" "${vdir}/dtbs/rockchip/$(basename "${dtb}")"
+  # 覆盖的后手，升级时随版本目录走）。家族 glob 由 env.sh 按 SoC 派生（rockchip/rk35*、
+  # allwinner/sun55i*）。
+  local dtb dtb_vendor="${KERNEL_DTB_FAMILY_GLOB%%/*}"
+  # shellcheck disable=SC2231
+  for dtb in "${ROOTFS_DIR}/usr/lib/linux-image-"*/${KERNEL_DTB_FAMILY_GLOB}; do
+    [[ -f "${dtb}" ]] && run sudo install -Dm644 "${dtb}" "${vdir}/dtbs/${dtb_vendor}/$(basename "${dtb}")"
   done
 
   # 板级 DTB override：把本板内核 DTB 复制成固定名 /boot/<version>/dtb。
-  # grub menuentry 模板（hooks/live/94-rockchip-grub-devicetree.chroot 注入的条件块）
+  # grub menuentry 模板（hooks/live/94-sbc-grub-devicetree.chroot 注入的条件块）
   # 见到这个文件就 `devicetree` 加载它，让内核用我们随版本走的 DTB，不受板载残留旧
   # U-Boot 控制 DTB 影响。仅对设了 BOARD_DTB_OVERRIDE=1 的板生效。
   if [[ "${BOARD_DTB_OVERRIDE:-0}" == "1" ]]; then
@@ -218,11 +264,13 @@ stage_image() {
   run sudo chroot "${ROOTFS_DIR}" env PATH="${chroot_path}" \
     grub-install --target=arm64-efi \
     --no-nvram --removable --boot-directory=/mnt/boot --efi-directory=/mnt/boot/efi
+  local -a grub_media_args=()
+  [[ "${BOARD_BIND_BOOT_MEDIA:-0}" == "1" ]] && grub_media_args+=(--pin-boot-media)
   run sudo chroot "${ROOTFS_DIR}" env PATH="${chroot_path}" \
     python3 /tmp/grub-setup.py \
     --root-dir /mnt --version "${version}" \
     --console-type "${CONSOLE_TYPE}" --console-num "${CONSOLE_NUM}" \
-    --console-speed "${BOARD_SERIAL_BAUD}"
+    --console-speed "${BOARD_SERIAL_BAUD}" "${grub_media_args[@]}"
 
   run sync
   cleanup_image
@@ -231,12 +279,10 @@ stage_image() {
 
   # --- 压缩归档 -----------------------------------------------------------------
   local out
-  out="${OUT_DIR}/$(basename "${img}").zst"
-  run zstd -T"${JOBS}" "-${ZSTD_LEVEL}" --force -o "${out}" "${img}"
-  (cd "${OUT_DIR}" && sha256sum "${out##*/}" > "${out##*/}.sha256")
-  [[ "${KEEP_RAW_IMAGE}" == "1" ]] || run rm -f "${img}"
+  out="${OUT_DIR}/$(basename "${img}").xz"
+  archive_disk_image "${img}"
 
   section "完成：${out}"
-  log "烧录：zstd -dc '${out}' | sudo dd of=/dev/sdX bs=4M conv=fsync status=progress"
+  log "烧录：Etcher 直接选择 '${out}'，或 xz -dc '${out}' | sudo dd of=/dev/sdX bs=4M conv=fsync status=progress"
   log "串口：${BOARD_SERIAL_CONSOLE} @ ${BOARD_SERIAL_BAUD}n8；默认账户 vyos/vyos"
 }

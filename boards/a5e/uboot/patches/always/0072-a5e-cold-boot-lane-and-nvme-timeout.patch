@@ -1,0 +1,67 @@
+From: VyOS SBC maintainers
+Subject: [PATCH] A5E: explicitly power lane selectors on cold boot
+
+Use regulator consumers instead of duplicating GPIO ownership or relying
+on warm-reboot pin levels. Also fence timed-out NVMe DMA before callers
+can release their Identify or other command payload buffers.
+
+diff --git a/drivers/pci/pcie-sun55i-plat.c b/drivers/pci/pcie-sun55i-plat.c
+--- a/drivers/pci/pcie-sun55i-plat.c
++++ b/drivers/pci/pcie-sun55i-plat.c
+@@ -347,10 +347,30 @@
+ 	return ret;
+ }
+ 
++static int sun55i_pcie_enable_lane(struct udevice *dev, const char *name)
++{
++	struct udevice *reg;
++	int ret;
++
++	ret = device_get_supply_regulator(dev, name, &reg);
++	if (ret)
++		return ret;
++	ret = regulator_set_enable(reg, true);
++	return ret == -EALREADY ? 0 : ret;
++}
++
+ int sun55i_pcie_plat_hw_init(struct udevice *dev)
+ {
+ 	struct sun55i_pcie *pci = dev_get_priv(dev);
+ 	int ret;
++
++	/* Do not depend on GPIO levels inherited from a warm Linux reboot. */
++	ret = sun55i_pcie_enable_lane(dev, "lane-select-supply");
++	if (ret)
++		return ret;
++	ret = sun55i_pcie_enable_lane(dev, "lane-enable-supply");
++	if (ret)
++		return ret;
+ 
+ 	printf("PCIe: Acquiring resources...\n");
+ 
+diff --git a/dts/upstream/src/arm64/allwinner/sun55i-a527-cubie-a5e.dts b/dts/upstream/src/arm64/allwinner/sun55i-a527-cubie-a5e.dts
+--- a/dts/upstream/src/arm64/allwinner/sun55i-a527-cubie-a5e.dts
++++ b/dts/upstream/src/arm64/allwinner/sun55i-a527-cubie-a5e.dts
+@@ -452,3 +452,9 @@
+ 		spi-max-frequency = <24000000>;
+ 	};
+ };
++
++&pcie {
++	/* Explicit consumers for U-Boot; Linux uses regulator-boot/always-on. */
++	lane-select-supply = <&gma340_pcie>;
++	lane-enable-supply = <&gma340_oe>;
++};
+diff --git a/drivers/nvme/nvme.c b/drivers/nvme/nvme.c
+--- a/drivers/nvme/nvme.c
++++ b/drivers/nvme/nvme.c
+@@ -201,6 +201,9 @@
+ 		if (timeout_us > 0 && (timer_get_us() - start_time)
+ 		    >= timeout_us) {
+ 			pr_warn("nvme: cmd %#x timed out\n", cmd->common.command_id);
++			/* The caller may free its Identify/data buffer immediately. */
++			if (nvmeq->dev->stop_dma)
++				nvmeq->dev->stop_dma(nvmeq->dev->udev);
+ 			return -ETIMEDOUT;
+ 		}
+ 	}

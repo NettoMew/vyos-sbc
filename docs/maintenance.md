@@ -13,6 +13,7 @@ VyOS 固定到明确提交,内核沿用该提交的 `data/defaults.toml`,Debian 
 | VyOS | `22dfa15927f2bd01336ab2c0154800f061b0f2e8` | rolling,Debian bookworm,配套 Linux 6.18.50 |
 | U-Boot | `ece349ade2973e220f524ce59e59711cc919263f` | v2026.07 稳定版 |
 | rkbin | `3e288fe814e059dd06833495f845cab04ac20a5c` | DDR/BL31 文件还需按板记录摘要 |
+| TF-A（A523） | `e019f64d91ff7c2dfbbfe7f76a14f240761b9edc` | jernejsk 分支 a523-v4（上游 TF-A 尚无 sun55i_a523）;仅 Cubie A5E 的 BL31 |
 | AIC8800 | `516e3b087763d80c44f5e3b6d2dd63e0d925c91d` | `src/` 与此前固定版本一致;未宣称应用其 Debian 包补丁 |
 | r8125 | `9.018.00` | 仓库保留官网下载原始包,解包前核对固定 SHA256 |
 
@@ -23,6 +24,10 @@ Realtek 官网下载需要验证码。维护者提供的 9.018.00 原始包保�
 9.018.00 将模块参数 `eee_giga_lite` 改为 `enable_giga_lite`。项目没有持久化旧参数;自行添加过 modprobe 参数的设备需要检查并迁移。编译时继续关闭 ASPM、EEE、Giga Lite 的默认启用,保持 RSS 与多 TX 队列;另外显式维持此前关闭的 DASH 与 page reuse,避免版本升级同时引入尚未验证的新路径。这些选择不构成 WAN 断链根因判断或修复保证。
 
 ## 清理范围与回归
+
+U-Boot 板级必需修复放在 `boards/<board>/uboot/patches/always/*.patch`，按文件名顺序始终应用；
+既有 `patches/*.patch` 保持 `BOARD_UNLOCK_CORES` 门控。两类都进入输入指纹且不作为源码覆盖复制。
+A5E USB 交接补丁的硬件证据、验证边界及尚未解决的启动问题见 [A5E bring-up](a5e-bringup.md)。
 
 此次维护先为源码切换、缓存失效和构建失败路径增加回归测试,再修正实现。范围限于版本获取及构建可信性,不改变路由策略、网卡调优和板级开核默认值。
 
@@ -55,7 +60,8 @@ scripts/docker-build.sh e52c --dry-run
 
 ## 发布验收
 
-1. 四板分别生成整盘 `.img.zst` 与升级 `.iso`,校验压缩流及 ISO 内的 `sha256sum.txt`。
+1. 生成目标板整盘 `.img.xz` 与升级 `.iso`，校验压缩流及 ISO 内的 `sha256sum.txt`。
+   当前只调试 A5E，不自动构建其他板；旧版本产物 `.img.zst` 的历史记录保留。
 2. 检查内核版本、目标架构、模块 vermagic 与签名、板级 DTB 和 GRUB EFI 文件。
 3. E52C/R5S 检查 r8125 与网口命名;M28K 检查 AIC8800、固件和 OLED;E20C 检查其板级外设。
 4. 真机分别验证冷启动、网络转发、PPPoE、链路稳定性、升级与回退。M28K 还需验证无线 AP,不能以模块加载成功代替。
@@ -107,3 +113,41 @@ Kprobe 相关项保留为上游兼容基线,不声称 Mayami 当前使用 kprobe
 这不等于已完成 WAN 断链根因分析、PPPoE 长期稳定性和性能验收，也不代表其他三板本轮重编。
 
 能力分组、修复提交、压缩 Image 校验、产物摘要和证据边界见 [DAE 内核契约与复盘](dae-kernel.md)。
+
+## 2026-09-17 远程构建观察：lb build 对容器资源上限敏感
+
+在 amd64 宿主（80 核 / 125 GiB）用 `scripts/docker-build.sh` 构建时，把 `JOBS=32 BUILD_CPUS=32 BUILD_MEMORY=64g`
+传给容器,ISO 阶段在 `lb bootstrap_archives` 的 `apt-get update` 稳定失败:
+`Could not read from .../packages.vyos.net_..._InRelease - getline (12: Cannot allocate memory)`,
+随后 `provides only weak security information` 并中止。同一 builder 镜像直接 `docker run` 跑
+`apt-get update`（无限制 / 64g / 32g）均正常;改回脚本默认的 `16 / 16 / 32g` 后 ISO 阶段顺利通过。
+根因未定位（怀疑 qemu-user 下 apt 的 gpgv 拆分读取与 cgroup 上限的交互）,在查明前请保持默认资源上限,
+不要为了提速把 `BUILD_MEMORY`/`BUILD_CPUS` 翻倍。此外 `git archive` 在 Windows（`core.autocrlf=true`）
+上导出会把脚本转成 CRLF,向 Linux 构建机投放源码树时要加 `-c core.autocrlf=false`。
+
+## 2026-09-17 缓存指纹修正：host 镜像身份改用 RootFS 层摘要
+
+`scripts/docker-build.sh` 每次调用都会 `docker build` 一次 host 工具镜像。层全部命中缓存时 BuildKit
+仍会给出一个新的镜像 ID（config 不同、RootFS 完全相同）。此前把这个 ID 作为 `BUILD_HOST_IMAGE_ID`
+喂进内核/U-Boot 缓存指纹,结果是**每一次**调用都判定"内核输入已变"→ 重编内核 deb → deb 比 ISO 新
+→ 再重建 base ISO,五板顺序构建就要重复五遍 1.5 小时。现改为 RootFS 层摘要列表的 sha256
+（`rootfs:<sha256>`）:层相同即工具链相同;Dockerfile/apt 真变了层才变。远程构建当场用 `restamp.sh`
+按新身份重写了已有产物的缓存戳,避免多重编一轮。
+
+## 2026-09-17 原生 arm64 构建机（Apple Silicon + colima）实测
+
+在 M4 Mac mini（10 核 / 16 GiB）上用 Homebrew 装 `colima` + `docker` CLI,起原生 arm64 Ubuntu 24.04 VM:
+`colima start --cpu 8 --memory 10 --disk 50 --vm-type vz --arch aarch64 --mount-type virtiofs`,
+仓库放在 VM 数据盘 `/mnt/lima-colima/`（根盘只有 19 GiB）,在 VM 内直接跑
+`JOBS=8 BUILD_CPUS=8 BUILD_MEMORY=7g BUILDER_MEMORY=6g scripts/docker-build.sh <板>`（无 qemu,
+`deps` 阶段自动跳过 binfmt 检查）。同一棵树、同一 VyOS 提交的实测:
+
+| 阶段 | x86 + qemu（v2in0,80 核） | M4 原生（VM 8 核） |
+| --- | --- | --- |
+| host/builder 镜像 | 缓存 | 首次约 5 分钟 |
+| 内核交叉编（cross） | ~15 分钟 | ~15 分钟 |
+| base ISO（lb build） | ~1.5 小时 | **4 分钟** |
+| 每板 U-Boot + 整盘 img + 每板 ISO | ~10 分钟 | ~1.5 分钟 |
+| a5e 全链从零 | ~2 小时 | **28 分钟** |
+
+结论:仿真只该作兜底,日常构建用原生 arm64（本机 VM 或 GitHub arm64 runner）。

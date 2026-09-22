@@ -1,0 +1,74 @@
+From: VyOS SBC maintainers
+Subject: [PATCH] nvme: fence transport DMA before failed-probe buffer release
+
+Disable PCI bus mastering even when CC.EN does not clear, before any
+DMA allocation is freed. Keep the generic NVMe core transport-neutral.
+Enable the MTD parent required by SPI flash Kconfig.
+
+diff --git a/configs/radxa-cubie-a5e_defconfig b/configs/radxa-cubie-a5e_defconfig
+--- a/configs/radxa-cubie-a5e_defconfig
++++ b/configs/radxa-cubie-a5e_defconfig
+@@ -41,6 +41,7 @@
+ CONFIG_NVME_PCI=y
+ CONFIG_CMD_NVME=y
+ CONFIG_DM_REGULATOR_FIXED=y
++CONFIG_MTD=y
+ CONFIG_SPI=y
+ CONFIG_DM_SPI=y
+ CONFIG_SPI_SUNXI=y
+diff --git a/drivers/nvme/nvme.h b/drivers/nvme/nvme.h
+--- a/drivers/nvme/nvme.h
++++ b/drivers/nvme/nvme.h
+@@ -596,6 +596,8 @@
+ 
+ /* Represents an NVM Express device. Each nvme_dev is a PCI function. */
+ struct nvme_dev {
++	/* Transport fence before releasing DMA buffers on failed probe. */
++	void (*stop_dma)(struct udevice *udev);
+ 	struct udevice *udev;
+ 	struct list_head node;
+ 	struct nvme_queue **queues;
+diff --git a/drivers/nvme/nvme_pci.c b/drivers/nvme/nvme_pci.c
+--- a/drivers/nvme/nvme_pci.c
++++ b/drivers/nvme/nvme_pci.c
+@@ -20,6 +20,11 @@
+ 	return device_set_name(udev, name);
+ }
+ 
++static void nvme_pci_stop_dma(struct udevice *udev)
++{
++	dm_pci_clrset_config16(udev, PCI_COMMAND, PCI_COMMAND_MASTER, 0);
++}
++
+ static int nvme_probe(struct udevice *udev)
+ {
+ 	struct nvme_dev *ndev = dev_get_priv(udev);
+@@ -32,6 +37,8 @@
+ 	ndev->instance = trailing_strtol(udev->name);
+ 	ndev->bar = dm_pci_map_bar(udev, PCI_BASE_ADDRESS_0, 0, 0,
+ 				   PCI_REGION_TYPE, PCI_REGION_MEM);
++
++	ndev->stop_dma = nvme_pci_stop_dma;
+ 
+ 	/* Turn on bus-mastering */
+ 	dm_pci_clrset_config16(udev, PCI_COMMAND, 0, PCI_COMMAND_MASTER);
+diff --git a/drivers/nvme/nvme.c b/drivers/nvme/nvme.c
+--- a/drivers/nvme/nvme.c
++++ b/drivers/nvme/nvme.c
+@@ -948,12 +948,16 @@
+ 	free(id);
+ free_prp_pool:
+ 	nvme_disable_ctrl(ndev);
++	if (ndev->stop_dma)
++		ndev->stop_dma(udev);
+ 	free((void *)ndev->prp_pool);
+ 	nvme_free_queues(ndev, 0);
+ 	free((void *)ndev->queues);
+ 	return ret;
+ free_queue:
+ 	nvme_disable_ctrl(ndev);
++	if (ndev->stop_dma)
++		ndev->stop_dma(udev);
+ 	nvme_free_queues(ndev, 0);
+ 	free((void *)ndev->queues);
+ free_nvme:

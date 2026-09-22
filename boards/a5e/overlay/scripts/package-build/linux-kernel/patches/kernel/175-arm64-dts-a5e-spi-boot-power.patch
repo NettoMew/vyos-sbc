@@ -1,0 +1,19 @@
+From: VyOS SBC maintainers
+Subject: [PATCH] arm64: dts: A5E: retain the SPI boot flash supply
+
+CLDO1 at 1.8V supplies bank PC and the boot flash. Do not switch it off
+as unused: BROM needs to read SPI before SPL can reconfigure the PMIC
+on a warm reset. The firmware-passed DT has the same always-on policy.
+
+diff --git a/arch/arm64/boot/dts/allwinner/sun55i-a527-cubie-a5e.dts b/arch/arm64/boot/dts/allwinner/sun55i-a527-cubie-a5e.dts
+--- a/arch/arm64/boot/dts/allwinner/sun55i-a527-cubie-a5e.dts
++++ b/arch/arm64/boot/dts/allwinner/sun55i-a527-cubie-a5e.dts
+@@ -251,6 +251,8 @@
+ 			};
+ 
+ 			reg_cldo1: cldo1 {
++				regulator-always-on;
++				regulator-boot-on;
+ 				regulator-min-microvolt = <1800000>;
+ 				regulator-max-microvolt = <1800000>;
+ 				regulator-name = "vcc-pc-and-their-dog";

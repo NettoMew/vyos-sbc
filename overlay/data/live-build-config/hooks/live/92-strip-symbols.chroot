@@ -1,0 +1,10 @@
+#!/bin/sh
+# 92-strip-symbols.chroot（vyos-sbc 覆盖版，同名覆盖 vyos-build 上游 hook）。
+# 上游版本在 chroot 里对 /usr/bin、/usr/lib/<triplet> 等目录逐文件 file + strip；x86 宿主上
+# lb build 是 qemu 仿真的 arm64，这一步实测 20 分钟以上。strip 已挪到 image 阶段用宿主原生的
+# aarch64-linux-gnu-strip 做（lib/image.sh，同一套目录与参数，秒级）。base ISO 只是板无关
+# 中间产物，每板成品 squashfs 都经过 image 阶段，故成品与上游 strip 后等价。
+# 这里只保留上游末尾的 binutils 清理，保持成品包集一致。
+set -e
+echo "I: symbol stripping deferred to the host-side image stage (native aarch64-linux-gnu-strip)"
+apt-get -y purge --autoremove binutils

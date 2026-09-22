@@ -17,7 +17,7 @@ LAN 本机接收对照未证明稳定收益，保留原 RPS/RFS 配置。尚未�
 
 ## 已部署旧镜像存在两套配置来源
 
-`overlay/data/live-build-config/includes.chroot/usr/local/sbin/rockchip-net-tune.sh`
+`overlay/data/live-build-config/includes.chroot/usr/local/sbin/sbc-net-tune.sh`
 在启动时强制设置 GRO/GSO/TSO/SG、RPS/RFS/XPS 和 CPU governor。
 现场 `/usr/lib/python3/dist-packages/vyos/ifconfig/ethernet.py` 的 `update()`
 在网口配置应用时重新设置各项 offload：配置节点不存在通常意味着关闭，而非保持现状。

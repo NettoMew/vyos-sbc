@@ -1,0 +1,61 @@
+From: VyOS SBC maintainers
+Subject: [PATCH] PCI: sun55i: test live link state after firmware handoff
+
+A5E live handoff: LTSSM_CTRL=0 while APP_LINK=0x17 still claims link up.
+Linux then skipped enabling LTSSM and enumerated only the root port.
+Setting LTSSM bit0 changed LNKSTA from 0x1011 to 0xb012 and restored
+the endpoint immediately. Require the actual data-link-active state.
+
+diff --git a/drivers/pci/pcie-sunxi/pcie-sunxi-rc.c b/drivers/pci/pcie-sunxi/pcie-sunxi-rc.c
+--- a/drivers/pci/pcie-sunxi/pcie-sunxi-rc.c
++++ b/drivers/pci/pcie-sunxi/pcie-sunxi-rc.c
+@@ -642,16 +642,12 @@
+ 
+ static int sunxi_pcie_host_read_speed(struct sunxi_pcie *pci)
+ {
+-	int val, gen;
+-
+-	sunxi_pcie_dbi_ro_wr_en(pci);
+-	val = sunxi_pcie_readl_dbi(pci, LINK_CONTROL2_LINK_STATUS2);
+-	gen = val & 0xf;
+-
+-	dev_info(pci->dev, "PCIe speed of Gen%d\n", gen);
+-
+-	sunxi_pcie_dbi_ro_wr_dis(pci);
+-	return 0;
++	u8 cap = sunxi_pcie_plat_find_capability(pci, PCI_CAP_ID_EXP);
++	u32 gen = cap ? sunxi_pcie_readw_dbi(pci, cap + PCI_EXP_LNKSTA) &
++			PCI_EXP_LNKSTA_CLS : 0;
++
++	dev_info(pci->dev, "PCIe speed of Gen%u\n", gen);
++	return gen;
+ }
+ 
+ int sunxi_pcie_host_speed_change(struct sunxi_pcie *pci, int gen)
+@@ -725,17 +721,15 @@
+ 
+ static bool sunxi_pcie_host_link_up_status(struct sunxi_pcie_port *pp)
+ {
+-	u32 val;
+-	int ret;
+-	struct sunxi_pcie *pcie = to_sunxi_pcie_from_pp(pp);
+-	val = sunxi_pcie_readl(pcie, PCIE_LINK_STAT);
+-
+-	if ((val & RDLH_LINK_UP) && (val & SMLH_LINK_UP))
+-		ret = true;
+-	else
+-		ret = false;
+-
+-	return ret;
++	struct sunxi_pcie *pci = to_sunxi_pcie_from_pp(pp);
++	u8 cap;
++
++	/* APP_LINK can retain stale bits after firmware stops the link. */
++	if (!(sunxi_pcie_readl(pci, PCIE_LTSSM_CTRL) & PCIE_LINK_TRAINING))
++		return false;
++	cap = sunxi_pcie_plat_find_capability(pci, PCI_CAP_ID_EXP);
++	return cap && (sunxi_pcie_readw_dbi(pci, cap + PCI_EXP_LNKSTA) &
++		       PCI_EXP_LNKSTA_DLLLA);
+ }
+ 
+ static struct sunxi_pcie_host_ops sunxi_pcie_host_ops = {

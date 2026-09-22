@@ -1,0 +1,10 @@
+#!/bin/sh
+# 98-sbc-growfs-enable.chroot — 启用首启自动扩容服务。
+# 同 97-leds：用 chroot hook 建 wants symlink（而非在 includes.chroot 放绝对软链——
+# 那会让 build-vyos-image 的 copytree 跟随失败）。
+set -e
+[ -f /lib/systemd/system/sbc-growfs.service ] || { echo "E: sbc-growfs.service 缺失"; exit 1; }
+mkdir -p /etc/systemd/system/multi-user.target.wants
+ln -sf /lib/systemd/system/sbc-growfs.service \
+    /etc/systemd/system/multi-user.target.wants/sbc-growfs.service
+echo "I: sbc-growfs.service enabled"

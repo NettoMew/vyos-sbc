@@ -52,7 +52,7 @@ stage_iso() {
   compgen -G "$(kernel_deb_glob)" >/dev/null \
     || { [[ "${DRY_RUN:-0}" == "1" ]] || fatal "packages/ 缺内核 deb，先跑 kernel 阶段"; }
 
-  local version="${VYOS_VERSION:-$(date +%Y.%m.%d-%H%M)-rockchip}"
+  local version="${VYOS_VERSION:-$(date +%Y.%m.%d-%H%M)-sbc}"
   log "版本：${version}（构建者 ${BUILD_BY}）"
 
   # --build-type release：默认的 development 会塞 gdb/strace/vim + vyos-1x-smoketest，

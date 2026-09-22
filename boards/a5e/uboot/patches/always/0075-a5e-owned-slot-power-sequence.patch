@@ -1,0 +1,60 @@
+From: VyOS SBC maintainers
+Subject: [PATCH] PCI: A5E: cycle owned slot power and release it at OS handoff
+
+A5E/O2 Micro NVMe recovers with a real slot power cycle and reset held
+during power-up. Armbian initramfs readback verified the owned-power
+DT sequence. Do not keep the slot always-on across OS handoff/reset.
+Preserve the vendor binding's raw PERST# convention.
+
+diff --git a/drivers/pci/pcie-sun55i-plat.c b/drivers/pci/pcie-sun55i-plat.c
+--- a/drivers/pci/pcie-sun55i-plat.c
++++ b/drivers/pci/pcie-sun55i-plat.c
+@@ -281,6 +281,11 @@
+ 
+ 	/* WAKE# is an input; the lane-switch fixed regulators own PB6/PB7. */
+ 
++	/* Discharge a slot inherited from a warm reset before powering it again. */
++	ret = regulator_set_enable(pci->slot_3v3, false);
++	if (ret && ret != -EALREADY)
++		return ret;
++	mdelay(100);
+ 	ret = regulator_set_enable(pci->slot_3v3, true);
+ 	if (ret && ret != -EALREADY) {
+ 		printf("PCIe: Failed to enable 3.3V slot supply: %d\n", ret);
+diff --git a/drivers/pci/pcie-sun55i.c b/drivers/pci/pcie-sun55i.c
+--- a/drivers/pci/pcie-sun55i.c
++++ b/drivers/pci/pcie-sun55i.c
+@@ -7,6 +7,7 @@
+ 
+ 
+ #include <dm.h>
++#include <power/regulator.h>
+ #include <syscon.h>
+ #include <asm/io.h>
+ #include <asm/arch-sunxi/clock.h>
+@@ -379,6 +380,9 @@
+ 
+ 	dm_gpio_set_value(&pci->rst_gpio, 0);
+ 	sun55i_pcie_plat_ltssm_disable(pci);
++	/* Children have stopped DMA; release slot power before Linux takes over. */
++	if (regulator_set_enable(pci->slot_3v3, false))
++		printf("PCIe: slot power-off failed during handoff\n");
+ 	generic_phy_exit(&pci->phy);
+ 	clk_disable(&pci->pcie_aux);
+ 	return 0;
+diff --git a/dts/upstream/src/arm64/allwinner/sun55i-a527-cubie-a5e.dts b/dts/upstream/src/arm64/allwinner/sun55i-a527-cubie-a5e.dts
+--- a/dts/upstream/src/arm64/allwinner/sun55i-a527-cubie-a5e.dts
++++ b/dts/upstream/src/arm64/allwinner/sun55i-a527-cubie-a5e.dts
+@@ -71,9 +71,9 @@
+ 		regulator-name = "pcie-3v3";
+ 		regulator-min-microvolt = <3300000>;
+ 		regulator-max-microvolt = <3300000>;
+-		regulator-enable-ramp-delay = <1000>;
+-		regulator-always-on;
+-		regulator-boot-on;
++		/* The host owns slot power; PERST# must precede power-on. */
++		startup-delay-us = <100000>;
++		off-on-delay-us = <100000>;
+ 		gpio = <&r_pio 0 11 GPIO_ACTIVE_HIGH>; /* PL11 */
+ 		enable-active-high;
+ 	};

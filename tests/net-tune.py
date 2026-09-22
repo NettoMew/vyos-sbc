@@ -11,12 +11,12 @@ import unittest
 
 
 ROOT = Path(__file__).resolve().parents[1]
-SCRIPT = ROOT / "overlay/data/live-build-config/includes.chroot/usr/local/sbin/rockchip-net-tune.sh"
+SCRIPT = ROOT / "overlay/data/live-build-config/includes.chroot/usr/local/sbin/sbc-net-tune.sh"
 
 
 class NetTuneTest(unittest.TestCase):
     def setUp(self):
-        self.temporary = tempfile.TemporaryDirectory(prefix="rockchip-net-tune-")
+        self.temporary = tempfile.TemporaryDirectory(prefix="sbc-net-tune-")
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name)
         self.put("etc/rockchip/net-tune.conf", "")

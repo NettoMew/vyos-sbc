@@ -1,9 +1,52 @@
 # CLAUDE.md — 项目向导（给 Claude Code 看的）
 
+## 当前调试约束（2026-09-22，用户明确要求）
+- **只构建 A5E**，不要自动跑四块 Rockchip 板或 `make all`；默认 `make` / CI 选板改为 A5E。
+- 整盘默认 **`.img.xz`**（`XZ_LEVEL=6`），供 Etcher 直接刷；不再默认生成 `.img.zst`。
+- **最新进展（10:54）**：0545 的 SD/NVMe 系统与介质 UUID 隔离均已实测；用户授权清空的
+  FORESEE E2M2 64GB 已完成安装、完整 4 GiB 读回、扩容至 57.4 GiB 及文件直接读写测试。
+  **不要重复安装或清盘。** U-Boot 补丁至 0075、内核至 177：RC/ComboPHY/DT、实时链路状态、
+  插槽供电与 PERST#/REFCLK/DMA 交接配套修复。只改 reset GPIO 极性不是完整解决方案。
+  SPI 原始全空，逐字节证明后保存等价板外备份；定长写入固件、全片读回比较通过。
+  用户实际拔 SD 冷启动：`Trying to boot from sunxi SPI` → NVMe EFI → 0545 系统、SSH/读写通过。
+  无 SD 普通重启、再次读写和写 SPI 后插回 SD 恢复也通过，最终状态见 `docs/a5e-pcie.md`。
+  之前串口无响应期间 journal 持续运行约 3.57 小时，不应误判整机死机；本次串口/SSH 正常。
+  已知 U-Boot SD FAT 大文件写入失败，未修复；ESP 已先备份再修复并启动验证，不用该路径备份 SPI。
+  临时网络调试服务已从两块盘移除，不包含在正式镜像中。PCIe 与 USB3 共用通道，
+  本版选 PCIe，保留 USB2。rsyslog 已恢复 active，本轮未改该服务。
+- **此前调查记录**：用户反馈 Armbian 可启动，但 2026.09.17 A5E 镜像连 SPL/U-Boot 串口输出都没有。
+  换参考 Armbian 固件的对照镜像已进入 6.18.50-vyos（1 GiB、8 核），但 initrd ZSTD 损坏 +
+  BTF 指针异常导致 panic，**未进入用户态**。离线 initrd 解压、内核包对照和 BTF 结构检查均通过。
+  当时已获授权接管 COM3/115200；initrd、vmlinuz 和板上解压后 Image CRC 全部匹配。
+  同固件控制 DTB + `booti` 绕过 EFI/GRUB 后已进入 VyOS systemd 用户态，无原 initrd/BTF 错误；
+  低/高地址 booti 均成功登录，直接 bootefi 和手动 GRUB 也均进入 initramfs shell。
+  09-22 重启后确认原 GRUB 控制台为 ttyS0/115200；无 DTB override。原菜单无 debug 时
+  复现 initramfs 程序段错误：udevadm 内存文件偏移 0x12080 的 3 字节损坏，SD 源文件、
+  BusyBox/libc/ld/blkid 和本次 BTF 校验正常。取回坏页校验并重构整文件 SHA，确认非串口误码；
+  RAM 内恢复这 3 字节后 udevadm 恢复运行。01:08 已闭环：坏字节 phys=0x7bf1f080，
+  恰为旧 U-Boot OHCI HCCA=0x7bf1f000 的 frame_no/pad1 写回位置。retain_initrd 输入哈希正常；
+  usb stop 后原自动 GRUB 菜单成功登录，恢复 USB 后再次同地址损坏。确认此复现为 USB 遗留 DMA。
+  A5E patches/always/ 已加入 generic EHCI/OHCI OS_PREPARE 修复，0145 集成版收到启动成功反馈；
+  不要关 BTF。DMA 定位来自旧固件 A/B/A 实验，不代表每个早期无 SPL 故障都由 USB 引起。
+  独立网口问题已证实：官方 vyos-net-name-resolve 因 eth0/eth1 无 hw-id，将它们改成 eth2/eth3，
+  导致 Configuration error；现已实现官方 resolver ExecStartPre，只补经 DT 验证的缺失 hw-id。
+  移除 A5E 旧 ifrename 服务；不覆盖用户绑定、不重建删除的节点、不保存随机 MAC。
+  09-22 已从参考镜像内部取出完整 U-Boot config，确认 DRAM=936；按 Armbian 固定
+  commit 0648ff3c4125d673c18b5f032dc7c28545c542b5 纳入 CLDO3/MMC 必需补丁，完整 U-Boot/BL31 编译通过。
+- 接续改动在 `D:\vyos-rockchip.omx-worktrees\launch-feat-task`；原 `D:\vyos-rockchip` 的
+  未提交内容已完整导入当前 worktree，原目录保留未动。详细取证见 `docs/a5e-bringup.md`。
+
 VyOS（rolling）→ Rockchip 板整盘镜像构建器：RK3528（e20c / m28k）+ RK3568（r5s）+
-RK3582（e52c）。**四块板均真机验证通过**（e52c 含开核 8 核 + SPI PMIC 修复）。一个内核 + 一张板无关
+RK3582（e52c）+ **Allwinner A527（a5e = Radxa Cubie A5E，SD/NVMe 及 SPI 冷启动已实测）**。
+**四块 Rockchip 板均真机验证通过**（e52c 含开核 8 核 + SPI PMIC 修复）。一个内核 + 一张板无关
 base ISO 服务全 SoC 家族（主线"一个内核带全 DTB/全 SoC"同构）；板间差异全在
-`boards/<b>/board.conf` 声明 + overlay 数据投放。
+`boards/<b>/board.conf` 声明 + overlay 数据投放。SoC 家族（启动固件来源/产物/写盘偏移）同样是
+声明文件 `families/<家族>.conf`（rockchip=rkbin blob、sunxi=TF-A 现编 BL31），引擎对家族零 if，
+见下文 Cubie A5E 一节。**项目名 vyos-sbc（2026-09-17 由 vyos-rockchip 改名）**：共享运行时件统一
+`sbc-*` 前缀（服务/脚本/hook/udev/link、flavor `sbc.toml`、版本后缀 `-sbc`、docker 标签
+`vyos-sbc/*`），板级件用 `<厂商>-<板>-*`（`rockchip-r5s-ifrename`、`sunxi-a5e-ifrename`）；
+内核片段 `70-72-rockchip-*` 名副其实不改。net-tune 覆盖路径 `/etc/sbc/net-tune.conf`
+（旧 `/etc/rockchip/` 兼容一版）。GitHub 仓库与本地目录名尚未改（需用户在 GitHub 操作）。
 哲学与隔壁 `../alpine` 同源：**声明式 board 轴 + 引擎零板级 if 分支**，但 VyOS 侧
 全走官方机制 —— 我们对 vyos-build 的全部定制都是 `overlay/` 文件投放（flavor toml、
 内核 kconfig 片段、内核补丁），利用 vyos-build 自身的 glob（`config/*.config`
@@ -19,7 +62,7 @@ base ISO 服务全 SoC 家族（主线"一个内核带全 DTB/全 SoC"同构）�
 
 - **命名口径**：四板统一 **eth0=WAN、eth1(+eth2)=LAN**。e20c/m28k 走 udev `VYOS_IFNAME`（按 driver）。
   **r5s 两者并用**（缺一不可,真机踩出来的）：
-  ① `boards/r5s/rootfs/.../60-rockchip-net.rules` 设 `VYOS_IFNAME`（gmac0 用 DRIVERS、两个 RTL8125 用
+  ① `boards/r5s/rootfs/.../60-sbc-net.rules` 设 `VYOS_IFNAME`（gmac0 用 DRIVERS、两个 RTL8125 用
      PCIe 控制器内核名 `3c0000000.pcie`/`3c0400000.pcie`,**非** DT 节点名 fe26/fe27）——它走
      65-vyos-net 的 predefined 路径,**防止 vyos_net_name 把 r8125 口改回临时名 e3/e4**（否则
      eth1/eth2 不存在 → Configuration error）；
@@ -31,7 +74,7 @@ base ISO 服务全 SoC 家族（主线"一个内核带全 DTB/全 SoC"同构）�
 - **MAC**：r5s 的 gmac0 与两个 RTL8125 均无 efuse、每启随机 → WAN DHCP 每启换租约;需要再做固定。
 
 ## 入口 & 跑法
-- `make e20c` 全链；`make e20c-dry` 秒级验证改动（不构建/不联网/不 sudo）。
+- `make e20c` 全链；`make e20c-dry` 秒级验证改动（不构建/不联网/不 sudo）。板名：e20c m28k r5s e52c a5e。
 - `make kernel` / `make iso`：板无关共享产物（RK3528 家族一个内核一张 ISO）。
 - 缓存跳过逻辑：内核 deb 在 `work/vyos-build/packages/`、ISO 记录在
   `work/state/iso-path`、U-Boot 在 `work/uboot/<board>/`。`REBUILD_{KERNEL,ISO,UBOOT}=1` 强制。
@@ -59,9 +102,11 @@ base ISO 服务全 SoC 家族（主线"一个内核带全 DTB/全 SoC"同构）�
   vyos-1x 的模板找，别手写 grub.cfg。
 - chroot 依赖宿主 qemu binfmt 带 F 标志；/dev 用**非递归 bind**（rbind+lazy umount
   会把宿主 devpts 拽掉，见 alpine 项目的血泪注释）。
-- 串口：RK3528 = ttyS0 @ 1500000。flavor `rockchip.toml` 覆盖 arm64.toml 的 ttyAMA。
+- 串口：RK3528 = ttyS0 @ 1500000。flavor `sbc.toml` 覆盖 arm64.toml 的 ttyAMA。
 
 ## 加板（m28k 已按此落地，引擎零改动）
+board.conf 必须声明 `BOARD_FAMILY`（families/ 下的家族名）；新 SoC 家族 = 新增
+`families/<家族>.conf`（契约见 families/rockchip.conf 头注：三个变量 + 五个 family_* 钩子）。
 `boards/<b>/board.conf`（声明）+ `boards/<b>/uboot/`（U-Boot 源投放，镜像树结构）+
 `boards/<b>/overlay/.../patches/kernel/*.patch`（内核 DTS/补丁）。板级资产源头在
 `../alpine/boards/m28k/`，已复制（非引用）。m28k 的 8 个补丁（含现做的 132 PCIe 节点 backport——6.18.34 的 rk3528.dtsi 没有 pcie 节点和 phy.h include，板级 DTS 引用 &pcie 必须先补）已验证在 6.18.34
@@ -74,7 +119,7 @@ VyOS arm64 走 U-Boot EFI，grub 默认不加载 devicetree → 内核用的是 
 DTB**，不是内核 deb 里的。坑：m28k 出厂 eMMC 残留旧 U-Boot（rc3），其 DTB
 PCIe disabled，导致第二网口（PCIe RTL8111）起不来。修法 = 让内核改用我们随版本
 走的 DTB：① `boards/<b>/board.conf` 设 `BOARD_DTB_OVERRIDE=1` → image.sh 把
-`BOARD_KERNEL_DTB` 复制成 `/boot/<版本>/dtb`；② hook `94-rockchip-grub-devicetree.chroot`
+`BOARD_KERNEL_DTB` 复制成 `/boot/<版本>/dtb`；② hook `94-sbc-grub-devicetree.chroot`
 给 vyos-1x 的 grub menuentry 模板插条件块 `[ -e /boot/<ver>/dtb ] && devicetree ...`
 （改模板本身，VyOS 运行时重新生成 menuentry 也带，不会被抹）。e20c 不开（U-Boot
 DTB 正常，且其内核 DTB 还没 pcie 引用）。**别手动改 grub.cfg.d——VyOS 启动的
@@ -102,15 +147,15 @@ ISO 家族共享：aic8800 进共享 ISO，e20c 也会带（modules-load 加载 
 会超时几秒，待优化为 udev modalias 板自适应）。
 
 ## 网口命名固定 + LED + OLED（m28k，2026-06-13 实现待真机验证）
-- **命名固定**：`overlay/.../includes.chroot/etc/udev/rules.d/60-rockchip-net.rules`
+- **命名固定**：`overlay/.../includes.chroot/etc/udev/rules.d/60-sbc-net.rules`
   按 driver 设 `VYOS_IFNAME`（`rk_gmac-dwmac`→`eth1`=LAN，`r8169`→`eth0`=WAN），
   VyOS 的 65-vyos-net.rules 走 `vyos_net_name` 的 predefined 路径采用它 → 不再随
   probe 顺序漂移。板无关（e20c 同样 gmac+r8169，一致受益）。**待验**：实测
   vyos_net_name 是否吃 VYOS_IFNAME。
-- **pcie MAC 固定**：`includes.chroot/etc/systemd/network/10-rockchip-wan.link`
+- **pcie MAC 固定**：`includes.chroot/etc/systemd/network/10-sbc-wan.link`
   设 r8169 MAC（gmac MAC 由 DTS 141 固定）。ISO 家族共享 → e20c 也被设此 MAC，
   多板同时部署需板级化（image.sh 注入，后续）。
-- **LED**：`includes.chroot/usr/local/sbin/rockchip-leds.sh` + `rockchip-leds.service`
+- **LED**：`includes.chroot/usr/local/sbin/sbc-leds.sh` + `sbc-leds.service`
   （默认 enabled）。按网卡 driver 认 LAN(gmac)/WAN(pcie) 绑 netdev：white:lan→gmac、
   white:wan→pcie、stmmac-0:01 PHY 灯→gmac、green:status→heartbeat。**不依赖 eth 编号**
   （命名漂了也对）；缺对应 LED name 的板静默跳过。物理对应已实机确认：LAN=gmac=eth1。
@@ -165,7 +210,7 @@ gmac0(1G,RGMII+RTL8211F)=WAN + 2× RTL8125(2.5G,pcie3x1/3x2)=LAN。差异全声�
   而非可能偏旧的 U-Boot 控制 DTB（同 m28k 思路）。
 - **命名/LED 四板不变式**：**eth0=WAN、eth1(+eth2)=LAN** 对四板一致
   （rk3528 是 pcie=WAN/gmac=LAN，R5S 是 gmac0=WAN/RTL8125=LAN，E52C 两口全 RTL8125，最终 eth 角色相同）。
-  LED 脚本 rockchip-leds.sh 按接口名绑灯（eth0→WAN、eth1→LAN-1、eth2→LAN-2），零板族分支。
+  LED 脚本 sbc-leds.sh 按接口名绑灯（eth0→WAN、eth1→LAN-1、eth2→LAN-2），零板族分支。
 - **R5S 命名靠确定性改名服务（真机踩坑后定，2026-06-14）**：VyOS 的 udev 预定义命名
   （VYOS_IFNAME，rk3528 用的那套）在 R5S 启动期**不生效**——gmac 真实 add 在 initramfs
   （无 rootfs 60 规则）、rootfs 不重命名；r8125 是 out-of-tree 晚到 ~27s。手动 udevadm
@@ -176,7 +221,7 @@ gmac0(1G,RGMII+RTL8211F)=WAN + 2× RTL8125(2.5G,pcie3x1/3x2)=LAN。差异全声�
   wants 符号链接 enable，仅 R5S 装（rootfs overlay，image 阶段 rsync -aK 注入）。真机验证
   Configuration success + eth0=gmac/eth1,eth2=r8125。**关键坑**：PCIe 控制器内核设备名按
   CPU 地址叫 `3c0000000.pcie`/`3c0400000.pcie`，**不是** DT 节点名 fe260000/fe270000。
-  `boards/r5s/rootfs/etc/udev/rules.d/60-rockchip-net.rules`（DRIVERS+3c0 版）保留作冗余。
+  `boards/r5s/rootfs/etc/udev/rules.d/60-sbc-net.rules`（DRIVERS+3c0 版）保留作冗余。
 - **待用户确认**：物理 LAN-1/LAN-2 壳子标号 ↔ eth1(3c0000000)/eth2(3c0400000) 顺序（反了
   对调改名脚本里两个 3c0 地址）；gmac+RTL8125 MAC 都随机无 efuse → DHCP 每启换租约，需要再固定。
 
@@ -236,20 +281,90 @@ RK3582 = RK3588S 残核分级 bin。纯主线：mainline 6.18.34 自带 `rk3582-
 - **命名（两口同为 r8125，无 gmac 锚）**：`rockchip-e52c-ifrename.service`（`Before=vyos-router`）
   把两个 r8125 **按 PCIe 设备路径排序** → 第一个 eth0(WAN)、第二个 eth1(LAN)。**地址无关**
   （PCIe 拓扑固定→排序每启一致），比 R5S 按 `3c0xxx.pcie` 钉死更省事、不需真机先抓地址。
-  `60-rockchip-net.rules` 只设 `DRIVERS=="r8125", ENV{VYOS_IFNAME}="%k"`（保持现名）防
+  `60-sbc-net.rules` 只设 `DRIVERS=="r8125", ENV{VYOS_IFNAME}="%k"`（保持现名）防
   vyos_net_name 把口改回枚举名 e3/e4（同 R5S 的 clobber 坑），脚本末清 `/run/udev/vyos/`
   消除 AddrFormatError traceback。
 - **LED（真机踩坑，2026-06-14）**：e52c 三个灯 = `green:status`(gpio,heartbeat) +
   `green:lan`(pwm14) + `green:wan`(pwm11)，后两个是 DTS 的 **pwm-leds**。真机 `/sys/class/leds`
   起初只有 `green:status`——因 **`CONFIG_LEDS_PWM` 没开**，两个 PWM 灯不注册（PWM_ROCKCHIP 早
   =y、pwm11/14 DTS status=okay，就缺 leds-pwm 驱动）。修法：70 片段补 `CONFIG_LEDS_PWM=y`
-  （与 immortalwrt 一致）。灯名 `green:wan`/`green:lan` 已加进共享 `rockchip-leds.sh`（绑
+  （与 immortalwrt 一致）。灯名 `green:wan`/`green:lan` 已加进共享 `sbc-leds.sh`（绑
   eth0/eth1 netdev，link+tx+rx）——按名绑、其它板无此灯自动跳过，零板族分支。green:status
   的 heartbeat 真机实测在跳（class 层 brightness 0/1 振荡），状态灯本身正常。
 - **待真机确认**：① 物理 WAN/LAN 壳子标号 ↔ eth0/eth1（排序反了就对调脚本里 eth0/eth1
   目标名）；② `%k` 守卫是否够（不够则退回 R5S 式按 `*.pcie` 地址钉 VYOS_IFNAME=eth0/eth1，
   地址串先串口 `ls -l /sys/class/net/*/device` 读）；③ 开核后实际核数 + 稳定性；④ 两口
   RTL8125 MAC 随机 → DHCP 每启换租约，需要再固定。
+
+## Radxa Cubie A5E（Allwinner A527 = sun55i，2026-09-22 PCIe bring-up）
+第一块非 Rockchip 板。参考 Armbian `config/boards/radxa-cubie-a5e.csc`（家族 sun55iw3：
+U-Boot v2026.07 + TF-A jernejsk a523-v4 + 内核 6.18 current）。U-Boot v2026.07 自带
+`radxa-cubie-a5e_defconfig`（A523 DRAM 时序/AXP717/SPL LED 全在 defconfig），其 dts/upstream
+的 `sun55i-a527-cubie-a5e.dts` **已含 gmac0+gmac1**；内核 6.18.50 并非包含全部 A523 驱动，
+PCIe/ComboPHY/参考时钟必须由本板补丁补齐；固件传递的 DT 也必须同步，不能只改备用内核 DT。
+- **09-22 USB 交接修复**：`boards/a5e/uboot/patches/always/` 为 generic EHCI/OHCI 增加
+  OS_PREPARE，避免内核重用的 RAM 被旧 OHCI HCCA 帧号 DMA 写坏。必需补丁始终应用；
+  原 `patches/*.patch` 仍只由 `BOARD_UNLOCK_CORES` 控制，不影响 E52C 关闭开核的语义。
+  A5E 两个驱动对象编译、缓存 27 项与 xz 回归已过；0145 集成版已收到启动成功反馈。详见 bring-up 文档。
+- **09-22 PCIe 支持**：内核 170–174 + U-Boot 0050，PL11 插槽电源只有一处 GPIO 所有者，
+  PH11 PERST、PH12 WAKE# 输入、PB6/PB7 选择 PCIe；Linux 初始化 RC，固件不提前扫描 PCI。
+  `tests/a5e-pcie.py` 同时校验源码与实际双份 DTB 的引用/中断/时钟/供电契约；CI 从 deb 抽取验证。
+  必须用整盘 `.img.xz` 同时更新固件与内核；单独 ISO 升级不能补上固件 DT。实机枚举仍待验收。
+- **家族声明 `families/sunxi.conf`（引擎零改动的落点）**：`UBOOT_ARTIFACT=u-boot-sunxi-with-spl.bin`、
+  `UBOOT_IMAGE_OFFSET_KIB=128`、`KERNEL_DTB_FAMILY_GLOB=allwinner/sun55i*.dtb`；
+  `family_soc_config sun55i` → `TFA_PLAT=sun55i_a523`；`family_fetch_firmware` 拉 TF-A；
+  `family_firmware_prepare` 现编 `PLAT=sun55i_a523 DEBUG=1 bl31`（产物
+  `build/sun55i_a523/debug/bl31.bin`，无 DDR blob，DRAM init 在 U-Boot SPL）并给 U-Boot
+  `BL31= SCP=/dev/null`（无 SCP 固件，crust 不支持 A523）。`families/rockchip.conf` 同契约
+  （rkbin glob 按 SoC、`BL31= ROCKCHIP_TPL=`、32KiB、rk35*）。引擎侧：`lib/env.sh` source 家族文件并
+  调 `family_soc_config`；`lib/sources.sh` 调 `family_fetch_firmware`；`lib/uboot.sh` 调
+  `family_firmware_inputs`（进缓存指纹，含家族文件本身）与 `family_firmware_prepare`；
+  `lib/image.sh` 按 `UBOOT_IMAGE_OFFSET_KIB` dd、按家族 glob 复制 dtbs、且把共享 default_config 的
+  `speed "1500000"` 改成本板 `BOARD_SERIAL_BAUD`。`scripts/docker-build.sh` 白名单放行 `TFA_*`。
+  tests/build-cache.sh fixture source `families/rockchip.conf`，另加 `uboot_tfa_build`。
+- **TF-A 来源**：上游 TF-A（≤v2.15.0）`plat/allwinner` 无 A523；`build.conf` 钉
+  `TFA_REPO=jernejsk/arm-trusted-firmware` `TFA_REF=e019f64d…`（分支 a523-v4，与 Armbian 同款）。
+  上游合入后改两个变量即可。
+- **128KiB 偏移（GPT 硬约束）**：sunxi BROM 在 8KiB 与 128KiB 两处找 SPL，8KiB 会压坏 GPT
+  分区表项（sector 2–33）；U-Boot `board/sunxi/board.c` 的 `spl_mmc_get_uboot_raw_sector` 对
+  `MMC*_HIGH` 启动源自动 +120KiB 找 U-Boot 本体，故整包 dd 到 128KiB 即可（SD 与 eMMC 同）。
+  Armbian 用 8KiB 是因为它默认 MBR 分区表，别照抄。
+- **串口 ttyS0 @ 115200**（uart0，snps dw-apb-uart → 8250_DW；BROM/SPL/U-Boot/内核全链 115200，
+  不是 Rockchip 的 1500000）。115200 在 vyos-1x 白名单内，hook 93 对本板 inert。
+- **内核片段 `config/74-allwinner-sun55i.config`**：A523 三个 CCU（主/R/MCU）、新式 DT 驱动
+  pinctrl（PIO+R-PIO；pin function 全由 DTS `allwinner,pinmux` 描述，驱动无 per-SoC 表）、
+  PPU + **PCK-600**（gmac1 挂 `PD_VO1`，缺则 gmac1 永不 probe）、`I2C_MV64XXX` + `MFD_AXP20X(_I2C)` +
+  `REGULATOR_AXP20X`（AXP717+AXP323 挂 r_i2c0，cldo3 供 SD vmmc 与 gmac0 PHY、cldo4 供 gmac1
+  PHY，vyos_defconfig 里它们是 =m，必须 =y）、`MMC_SUNXI=y`（根盘）、`DWMAC_SUN8I`(gmac0，走
+  sun50i-a64-emac 兼容) + `DWMAC_SUN55I`(gmac1=GMAC200，snps,dwmac-4.20a) 均 =y、
+  `PHY_SUN4I_USB`、`SUNXI_WATCHDOG`、`RTC_DRV_SUN6I`、`NVMEM_SUNXI_SID`。RK 板上全是死代码。
+- **DTB：默认用 U-Boot 控制 DTB（`BOARD_DTB_OVERRIDE=0`）**，两个理由：① U-Boot 的 DTS 比
+  内核 6.18.50 的新（含 gmac1）且是本板专属（非 e52c 那种 generic）；② U-Boot sunxi 启动时从
+  SID efuse 派生 MAC 并 fixup 进 `ethernet0/ethernet1` alias → 两口 MAC 每启稳定（R5S/E52C
+  的随机 MAC 问题本板天然没有）。改成 override=1 会丢这份 fixup。
+  内核侧仍带 `boards/a5e/overlay/.../160-arm64-dts-allwinner-a523-gmac1-cubie-a5e.patch`（把
+  主线 6.19 的 rgmii1 pinmux + gmac1 dtsi 节点 + 板级 &gmac1/&mdio1 backport 到 6.18.50，
+  四段文本与 master 逐字一致，已 `patch -p1 --dry-run` 验证），让 `/boot/<ver>/dtbs/` 那份
+  内核 DTB 完整，也是 override 的后手。补丁触发家族内核重编（指纹机制），对 RK 板 DTB 无影响。
+- **网口命名**：两口都是 SoC dwmac 但**驱动不同**——gmac0→`dwmac-sun8i`、gmac1→`dwmac-sun55i`，
+  加上平台地址 `4500000.ethernet` / `4510000.ethernet` 和 DT 固件 MAC 是可靠的锚。
+  `sunxi-a5e-hwid.py` 通过官方命名服务的 ExecStartPre，在 config.boot 已解锁/挂载后运行：
+  只给存在的 eth0/eth1 节点补缺失 hw-id，原子更新并留私有首份备份，保留版本 footer 和已有绑定。
+  SID MAC 是本地管理地址，不能依赖会过滤这类地址的官方 interface-rescan 自动补齐。
+  A5E 的 `60-sbc-net.rules` 仅屏蔽共享 RK3528 规则，不设 VYOS_IFNAME；旧 ifrename 服务已删除。
+  实际改名只由官方 resolver 执行，避免 eth0/eth1 再被改成 eth2/eth3。
+  **待真机确认**：外壳 WAN/LAN 标号（含 PoE）↔ gmac0/gmac1；用户可显式交换 hw-id。
+- **LED**：DTS `green:power`（PL4，DT 默认 heartbeat）+ `blue:activity`（PL5，未绑）。
+  `sbc-leds.sh` 的心跳列表加了 `green:power`（幂等重设）。
+- **不带**：r8125/aic8800/oled（无 out-of-tree 资产 → 与 e20c 同属 container 模式也能出镜像，
+  CI 校验放行 e20c|a5e）。板载 AIC8800 Wi-Fi 6（SDIO on mmc1）主线 DTS 无 mmc1/WiFi 节点，本版
+  不启用；要做时补 mmc1 DTS + `BOARD_WIFI_AIC8800=1` 复用 lib/aic8800.sh（m28k 的两补丁按板目录
+  `boards/a5e/aic8800/` 投放）。GPU/NPU 不编。
+- **真机首跑风险点（按概率排序）**：① TF-A fork bl31 + U-Boot 2026.07 组合能否上电（Armbian 同组合
+  在跑，风险低）；② U-Boot bootstd 在本板扫 ESP 起 grub（sunxi 走 EFI 与 RK 同路径）；③ gmac1
+  在 6.18 驱动 + U-Boot 6.19 级 DT 下 probe（驱动读的 syscon/mbus/延时属性两边一致，已核对）；
+  ④ 若 U-Boot DTB 有问题 → `BOARD_DTB_OVERRIDE=1`，此时靠补丁 160 的内核 DTB（代价：随机 MAC）。
+  事后取证同 RK：持久层 journal + `cfg-std*.log`。
 
 ## C2 板级资产隔离：板无关 base ISO + 每板 host 侧注入（2026-06-13）
 **问题**：ISO 家族共享 + packages/ 累积 → m28k 编的 oled deb / aic8800 .ko 会被打进
@@ -290,12 +405,12 @@ key、可回滚，无需重刷。
   故须先跑一版**带新 hook 94（认 vmlinuz-dtb）的镜像**，之后每次 `add system image` 才会带
   devicetree 条件。即首次切到本机制要 dd 一次（或热替换 grub 模板 + dtb），此后更新一条命令。
 - 改 hook 94 会让 base ISO 进 `iso_overlay_digest` → 下次 `make` 自动重建 base ISO（必须，运行
-  系统的模板要认 vmlinuz-dtb）。`make <board>` 同时产 `out/*.img.zst`（全盘刷）+ `out/*.iso`（add 升级）。
+  系统的模板要认 vmlinuz-dtb）。`make <board>` 同时产 `out/*.img.xz`（全盘刷）+ `out/*.iso`（add 升级）。
 
 ## 网络性能调优 net-tune
 flowtable 与 Ethernet offload/RPS/RFS 留给用户通过 VyOS CLI 配置。
-`rockchip-net-tune.service`（共享，四板默认 enabled），开机 oneshot 跑
-`includes.chroot/usr/local/sbin/rockchip-net-tune.sh`：
+`sbc-net-tune.service`（共享，四板默认 enabled），开机 oneshot 跑
+`includes.chroot/usr/local/sbin/sbc-net-tune.sh`：
 - **UDP GRO forwarding**：保留 `rx-udp-gro-forwarding` 开关；不再覆盖 VyOS 管理的
   GRO/GSO/TSO/SG、RX checksum、RPS/RFS。不调用 `ethtool -L`，避免重建队列间接
   重置用户配置。驱动初始队列数保留；r8125 9.018.00 本就没有 `set_channels`。
@@ -308,9 +423,9 @@ flowtable 与 Ethernet offload/RPS/RFS 留给用户通过 VyOS CLI 配置。
   未完成归属迁移前不要同时引入 profile。
 部署新脚本前需要显式迁移所需 offload/RPS/RFS 配置；未配置节点不再由启动脚本
 补开。迁移差异、验证边界见 [网络调优配置边界](docs/network-performance.md)。
-philosophy 同 rockchip-leds.sh：**按接口名/驱动认，板间零 if 分支，缺项静默跳过** → 四板一脚本。
-可选覆盖 `/etc/rockchip/net-tune.conf`（`GOVERNOR=` / `IFACE_CPU="eth0:2 ..."`，默认四板都不带）。
-enable 走 hook `95-rockchip-net-tune-enable.chroot`（chroot 建 wants symlink，同 97-leds）。
+philosophy 同 sbc-leds.sh：**按接口名/驱动认，板间零 if 分支，缺项静默跳过** → 四板一脚本。
+可选覆盖 `/etc/sbc/net-tune.conf`（`GOVERNOR=` / `IFACE_CPU="eth0:2 ..."`，默认四板都不带）。
+enable 走 hook `95-sbc-net-tune-enable.chroot`（chroot 建 wants symlink，同 97-leds）。
 service `After=vyos-router.service`。**关键时序坑（真机踩出，2026-06-14）**：vyos-router.service
 的 unit 很早就 "Started"（systemd 认 active），但真正配网/接口 up 是它**异步**在之后做
 （首启 ~33–57s 才 Configuration success），而 **r8125 的 MSI IRQ 与 rx/tx 队列要到接口
@@ -340,7 +455,7 @@ IFF_UP 再调**（eth1 无网线也算 admin-up，最多 ~120s）。
   （内核片段/补丁没变就跳过重编，且这棵已编树供 r8125/aic8800 编 out-of-tree 模块）；③ 本地构的
   arm64 builder 容器镜像（`docker save|zstd`，key=`builder-<arch>-vN`，vyos-build Dockerfile
   变了就 bump 版本刷新）。**base ISO 不缓存**：每次全新 lb build（VyOS rolling 包集会动，求新鲜）。
-- 产物 `out/*.img.zst` 传 artifact。手动跑：`gh workflow run build-image -R <owner>/vyos-rockchip -f board=r5s`。
+- 产物 `out/*.img.xz` 传 artifact。手动跑：`gh workflow run build-image -R <owner>/vyos-sbc -f board=a5e`。
 
 ## 内核两种构建模式（KERNEL_BUILD_MODE）
 container（默认）= 官方 build.py 进 arm64 容器；cross = 宿主机交叉 bindeb-pkg
@@ -353,7 +468,7 @@ work/kernel/（host 属主），每次全新解包保证确定性。6.18 kbuild 
 - **console speed 1500000 不在 vyos-1x 白名单**（只到 115200）→ 首次 commit 在
   system_console 校验失败 → 串口只见 "Configuration error"、网卡名卡在 e2/e3
   （e2/e3 是 vyos_net_name 的中间名，coldplug 换名在 configure 阶段，属下游症状）。
-  修复 = `overlay/.../hooks/live/93-rockchip-console-speed.chroot`（chroot hook 把
+  修复 = `overlay/.../hooks/live/93-sbc-console-speed.chroot`（chroot hook 把
   1500000 sed 进编译产物 node.def），改动 hook 后需 `REBUILD_ISO=1`。
 - 良性噪音别误判：`mounting /dev/mmcblk1 on /live/persistence failed`（live-boot
   探整盘）、`biosdevname error`（arm64 无此工具，有 eth 兜底）、`password changed
@@ -365,6 +480,6 @@ work/kernel/（host 属主），每次全新解包保证确定性。6.18 kbuild 
 
 ## 验证
 - 改完：`bash -n lib/*.sh scripts/build.sh` + `make e20c-dry`。
-- 镜像抽查：`zstd -dc out/X.img.zst | sudo losetup -fP --show …`，看 p2 的
+- 镜像抽查：`xz -dk out/X.img.xz` 后对 `.img` 使用 `sudo losetup -fP --show`，看 p2 的
   `/boot/<版本>/`、`persistence.conf`、`boot/grub/grub.cfg.d/`、ESP 的 BOOTAA64.EFI。
 - 首跑风险点：U-Boot EFI bootflow 真机验证；qemu 仿真下 ISO 构建耗时数小时属正常。

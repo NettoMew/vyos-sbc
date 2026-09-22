@@ -1,0 +1,145 @@
+arm64: dts: allwinner: a523: backport gmac1 (GMAC200) + Cubie A5E second port
+
+Backport of the mainline (post-6.18) sun55i-a523 gmac1 support into the
+6.18.y device tree, so the kernel-side DTB for Radxa Cubie A5E describes
+both Ethernet ports:
+
+  * sun55i-a523.dtsi: rgmii1 pinmux (PJ bank, function "gmac1") and the
+    gmac1 node (ethernet@4510000, "allwinner,sun55i-a523-gmac200" +
+    "snps,dwmac-4.20a", clocks CLK_BUS_EMAC1/CLK_MBUS_EMAC1, PD_VO1 power
+    domain, stmmac axi/mtl queue config) — text identical to mainline.
+  * sun55i-a527-cubie-a5e.dts: ethernet1 alias, &gmac1 (rgmii-id,
+    phy-supply cldo4, tx/rx internal delay 300/400 ps) and &mdio1 with the
+    external PHY at address 1 (reset PJ16) — identical to mainline.
+
+Everything the node needs already exists in 6.18.50: the dwmac-sun55i
+glue driver (drivers/net/ethernet/stmicro/stmmac/dwmac-sun55i.c), the
+CLK_*_EMAC1 / RST_BUS_EMAC1 clock and reset IDs, PD_VO1 in the PCK-600
+binding header, and the DT-driven A523 pinctrl (functions come from the
+"allwinner,pinmux" property, no driver table to extend).
+
+The board build normally boots with the U-Boot control DTB (U-Boot 2026.07
+already carries this dts), so this patch only matters for the kernel DTB
+copy in /boot/<version>/dtbs and for BOARD_DTB_OVERRIDE=1.
+
+Source: linux master arch/arm64/boot/dts/allwinner/{sun55i-a523.dtsi,
+sun55i-a527-cubie-a5e.dts}, hunks re-applied onto v6.18.50.
+
+diff -ruN a/arch/arm64/boot/dts/allwinner/sun55i-a523.dtsi b/arch/arm64/boot/dts/allwinner/sun55i-a523.dtsi
+--- a/arch/arm64/boot/dts/allwinner/sun55i-a523.dtsi	2026-09-17 19:13:28.147897900 +0800
++++ b/arch/arm64/boot/dts/allwinner/sun55i-a523.dtsi	2026-09-17 19:13:28.291120700 +0800
+@@ -183,6 +183,16 @@
+ 				bias-disable;
+ 			};
+ 
++			rgmii1_pins: rgmii1-pins {
++				pins = "PJ0", "PJ1", "PJ2", "PJ3", "PJ4",
++				       "PJ5", "PJ6", "PJ7", "PJ8", "PJ9",
++				       "PJ11", "PJ12", "PJ13", "PJ14", "PJ15";
++				allwinner,pinmux = <5>;
++				function = "gmac1";
++				drive-strength = <40>;
++				bias-disable;
++			};
++
+ 			uart0_pb_pins: uart0-pb-pins {
+ 				pins = "PB9", "PB10";
+ 				allwinner,pinmux = <2>;
+@@ -604,6 +614,51 @@
+ 			};
+ 		};
+ 
++		gmac1: ethernet@4510000 {
++			compatible = "allwinner,sun55i-a523-gmac200",
++				     "snps,dwmac-4.20a";
++			reg = <0x04510000 0x10000>;
++			clocks = <&ccu CLK_BUS_EMAC1>, <&ccu CLK_MBUS_EMAC1>;
++			clock-names = "stmmaceth", "mbus";
++			resets = <&ccu RST_BUS_EMAC1>;
++			reset-names = "stmmaceth";
++			interrupts = <GIC_SPI 47 IRQ_TYPE_LEVEL_HIGH>;
++			interrupt-names = "macirq";
++			pinctrl-names = "default";
++			pinctrl-0 = <&rgmii1_pins>;
++			power-domains = <&pck600 PD_VO1>;
++			syscon = <&syscon>;
++			snps,fixed-burst;
++			snps,axi-config = <&gmac1_stmmac_axi_setup>;
++			snps,mtl-rx-config = <&gmac1_mtl_rx_setup>;
++			snps,mtl-tx-config = <&gmac1_mtl_tx_setup>;
++			status = "disabled";
++
++			mdio1: mdio {
++				compatible = "snps,dwmac-mdio";
++				#address-cells = <1>;
++				#size-cells = <0>;
++			};
++
++			gmac1_mtl_rx_setup: rx-queues-config {
++				snps,rx-queues-to-use = <1>;
++
++				queue0 {};
++			};
++
++			gmac1_stmmac_axi_setup: stmmac-axi-config {
++				snps,wr_osr_lmt = <0xf>;
++				snps,rd_osr_lmt = <0xf>;
++				snps,blen = <256 128 64 32 16 8 4>;
++			};
++
++			gmac1_mtl_tx_setup: tx-queues-config {
++				snps,tx-queues-to-use = <1>;
++
++				queue0 {};
++			};
++		};
++
+ 		ppu: power-controller@7001400 {
+ 			compatible = "allwinner,sun55i-a523-ppu";
+ 			reg = <0x07001400 0x400>;
+diff -ruN a/arch/arm64/boot/dts/allwinner/sun55i-a527-cubie-a5e.dts b/arch/arm64/boot/dts/allwinner/sun55i-a527-cubie-a5e.dts
+--- a/arch/arm64/boot/dts/allwinner/sun55i-a527-cubie-a5e.dts	2026-09-17 19:13:28.150625600 +0800
++++ b/arch/arm64/boot/dts/allwinner/sun55i-a527-cubie-a5e.dts	2026-09-17 19:13:28.324918900 +0800
+@@ -14,6 +14,7 @@
+ 
+ 	aliases {
+ 		ethernet0 = &gmac0;
++		ethernet1 = &gmac1;
+ 		serial0 = &uart0;
+ 	};
+ 
+@@ -84,6 +85,17 @@
+ 	status = "okay";
+ };
+ 
++&gmac1 {
++	phy-mode = "rgmii-id";
++	phy-handle = <&ext_rgmii1_phy>;
++	phy-supply = <&reg_cldo4>;
++
++	tx-internal-delay-ps = <300>;
++	rx-internal-delay-ps = <400>;
++
++	status = "okay";
++};
++
+ &gpu {
+ 	mali-supply = <&reg_dcdc2>;
+ 	status = "okay";
+@@ -97,6 +109,16 @@
+ 		reset-assert-us = <10000>;
+ 		reset-deassert-us = <150000>;
+ 	};
++};
++
++&mdio1 {
++	ext_rgmii1_phy: ethernet-phy@1 {
++		compatible = "ethernet-phy-ieee802.3-c22";
++		reg = <1>;
++		reset-gpios = <&pio 9 16 GPIO_ACTIVE_LOW>; /* PJ16 */
++		reset-assert-us = <10000>;
++		reset-deassert-us = <150000>;
++	};
+ };
+ 
+ &mmc0 {
