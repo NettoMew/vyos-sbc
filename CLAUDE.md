@@ -96,6 +96,12 @@ base ISO 服务全 SoC 家族（主线"一个内核带全 DTB/全 SoC"同构）�
   `overlay/scripts/package-build/linux-kernel/config/70-rockchip-rk3528.config`。
 - 本地内核 deb 放进 `packages/` 后由 build-vyos-image 当 packages.chroot 直装，
   压过仓库同名包 —— 不要动这个机制。
+- **arm64 内核是 EFI zboot（6.18.59 起）**：vyos-build 68a9d230（T861 安全启动）在 arm64
+  vyos_defconfig 开了 `CONFIG_EFI_ZBOOT=y`，deb 里 `/boot/vmlinuz-*` 从 Image.gz 变成
+  `vmlinuz.efi`（`MZ\0\0zimg` 头 + gzip 载荷，载荷是按 Image 头 image_size 补零的 Image）。
+  `kernel_validate_build` 按 zboot 头解出载荷比对（issue #4）；手动 `booti` 调试先用
+  `kernel_zboot_payload` 解出 Image。U-Boot EFI→GRUB→zboot 尚未在任何板上实机验证；
+  起不来就在 70 片段加 `# CONFIG_EFI_ZBOOT is not set` 回退 Image.gz。
 - 镜像布局：u-boot-rockchip.bin@sector64（rkbin TPL+BL31，RK3528 用
   bl31_v1.20 + ddr_1056MHz_v1.11）；ESP 从 16MiB 起（u-boot 占到 ~10MiB，别下调）；
   root 分区 label 必须是 `persistence`（live-boot 按 label 找持久层）。

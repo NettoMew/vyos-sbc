@@ -13,7 +13,8 @@ fatal() { printf '%s\n' "$*" >&2; exit 1; }
 log() { :; }
 warn() { :; }
 
-for function in kernel_validate_config kernel_validate_btf kernel_validate_build; do
+for function in kernel_validate_config kernel_validate_btf kernel_zboot_payload \
+    kernel_validate_build; do
     declare -F "${function}" >/dev/null || fatal "missing function: ${function}"
 done
 
@@ -120,7 +121,8 @@ mkdir -p "${TMP}/src/arch/arm64/boot" "${TMP}/package/boot"
 printf 'CONFIG_BPF=y\nCONFIG_NET_CLS_BPF=m\n' > "${TMP}/src/.config"
 printf '  [12] .BTF PROGBITS 0000000000000000 000040 001000 00 A 0 0 4\n' \
     > "${TMP}/src/vmlinux"
-printf 'kernel image\n' > "${TMP}/src/arch/arm64/boot/Image"
+# Minimal arm64 Image header: image_size (le64 at 0x10) = 96 covers BSS past the file end.
+printf 'MZ@\372kernel\0\0\0\0\0\0\140\0\0\0\0\0\0\0image\n' > "${TMP}/src/arch/arm64/boot/Image"
 
 reset_package() {
     cp "${TMP}/src/.config" "${TMP}/package/boot/config-test-vyos"
@@ -142,6 +144,38 @@ gzip -c "${TMP}/src/arch/arm64/boot/Image" > "${TMP}/package/boot/vmlinuz-test-v
 pack_fixture
 check_package
 printf 'different image\n' | gzip > "${TMP}/package/boot/vmlinuz-test-vyos"
+pack_fixture
+expect_failure check_package
+
+# CONFIG_EFI_ZBOOT packages ship vmlinuz.efi: the header points at a compressed
+# copy of Image zero-padded to its image_size, followed by other sections.
+le32() {
+    local i
+    for i in 0 8 16 24; do
+        printf '%b' "\\0$(printf '%03o' $(( ($1 >> i) & 255 )))"
+    done
+}
+write_zboot() {
+    local comp="$1" payload="$2" size
+    size="$(wc -c < "${payload}")"
+    {
+        printf 'MZ\0\0zimg'; le32 64; le32 "${size}"; le32 0; le32 0
+        printf '%s' "${comp}"; head -c $(( 40 - ${#comp} )) /dev/zero
+        cat "${payload}"
+        printf 'trailing sections\n'
+    } > "${TMP}/package/boot/vmlinuz-test-vyos"
+}
+cp "${TMP}/src/arch/arm64/boot/Image" "${TMP}/padded"
+truncate -s 96 "${TMP}/padded"
+gzip -c "${TMP}/padded" > "${TMP}/payload"
+write_zboot gzip "${TMP}/payload"
+pack_fixture
+check_package
+write_zboot lz4 "${TMP}/payload"
+pack_fixture
+expect_failure check_package
+gzip -c "${TMP}/src/arch/arm64/boot/Image" > "${TMP}/payload"
+write_zboot gzip "${TMP}/payload"
 pack_fixture
 expect_failure check_package
 reset_package

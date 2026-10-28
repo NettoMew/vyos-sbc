@@ -115,24 +115,46 @@ kernel_validate_btf() {
   ' <<< "${sections}" || { echo "kernel has no nonempty .BTF section: $1" >&2; return 1; }
 }
 
+# 输出 EFI zboot 镜像解压后的载荷。头部见 drivers/firmware/efi/libstub/zboot-header.S：
+# 0x4 "zimg"、0x8 载荷偏移、0xc 载荷长度（le32）、0x18 起压缩算法名。
+kernel_zboot_payload() {
+  local f="$1" off size comp
+  off="$(od -An -tu4 -j8 -N4 "${f}")" && size="$(od -An -tu4 -j12 -N4 "${f}")" || return
+  comp="$(head -c 56 "${f}" | tail -c +25 | tr -d '\0')"
+  case "${comp}" in
+    gzip|zstd) ;;
+    *) echo "unsupported zboot compression: ${comp:-none}" >&2; return 1 ;;
+  esac
+  dd if="${f}" iflag=skip_bytes,count_bytes skip="$((off))" count="$((size))" bs=64K status=none \
+    | "${comp}" -dc
+}
+
 # Check both build outputs and what will actually be shipped, before accepting
 # a package from the intentionally tolerated perf failure path.
 kernel_validate_build() (
   set -o pipefail
   local src="$1" deb="$2" kv="$3" requirements="$4" tmp
+  local image="${src}/arch/arm64/boot/Image" vmlinuz
   kernel_validate_config "${src}/.config" "${requirements}" || return
   kernel_validate_btf "${src}/vmlinux" || return
   tmp="$(mktemp -d)" || return
   trap 'rm -rf "${tmp}"' EXIT
+  vmlinuz="${tmp}/boot/vmlinuz-${kv}-vyos"
   dpkg-deb --fsys-tarfile "${deb}" | tar -xf - -C "${tmp}" \
     "./boot/config-${kv}-vyos" "./boot/vmlinuz-${kv}-vyos" || return
   kernel_validate_config "${tmp}/boot/config-${kv}-vyos" "${requirements}" || return
   cmp "${src}/.config" "${tmp}/boot/config-${kv}-vyos" || return
-  # ARM64 bindeb-pkg normally ships Image.gz; compare the actual boot payload.
-  if gzip -t "${tmp}/boot/vmlinuz-${kv}-vyos" 2>/dev/null; then
-    gzip -dc "${tmp}/boot/vmlinuz-${kv}-vyos" | cmp "${src}/arch/arm64/boot/Image" -
+  # ARM64 bindeb-pkg ships Image.gz, or vmlinuz.efi once vyos_defconfig enables
+  # CONFIG_EFI_ZBOOT (vyos-build 68a9d230, kernel 6.18.59); compare the actual boot payload.
+  if gzip -t "${vmlinuz}" 2>/dev/null; then
+    gzip -dc "${vmlinuz}" | cmp "${image}" -
+  elif [[ "$(head -c 8 "${vmlinuz}" | tail -c 4)" == zimg ]]; then
+    # zboot 载荷是按 Image 头 image_size（0x10）补零后的 Image（Makefile.zboot 的 copy_and_pad）。
+    cp "${image}" "${tmp}/Image" || return
+    truncate -s "$(( $(od -An -tu4 -j16 -N4 "${image}") ))" "${tmp}/Image" || return
+    kernel_zboot_payload "${vmlinuz}" | cmp "${tmp}/Image" -
   else
-    cmp "${src}/arch/arm64/boot/Image" "${tmp}/boot/vmlinuz-${kv}-vyos"
+    cmp "${image}" "${vmlinuz}"
   fi
 )
 
@@ -164,7 +186,8 @@ kernel_build_container() {
   # arm64 上有并行构建竞态，常在 linux-image deb 已产出后才炸掉 perf 包——
   # 我们不需要 perf，以 image deb 的完整性与元数据验证为准。glob 的 `-vyos_` 天然排除 -vyos-dbg_。
   builder_exec "
-    $(declare -f kernel_validate_deb kernel_validate_config kernel_validate_btf kernel_validate_build)
+    $(declare -f kernel_validate_deb kernel_validate_config kernel_validate_btf \
+      kernel_zboot_payload kernel_validate_build)
     cd scripts/package-build/linux-kernel
     ./build.py --packages linux-kernel || echo 'W: build.py 非零退出，必须单独验证本轮 image deb'
     for deb in linux-image-*-vyos_*_arm64.deb; do
